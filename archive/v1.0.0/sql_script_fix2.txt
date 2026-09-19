@@ -1,0 +1,48 @@
+-- إعطاء الصلاحيات الأساسية للتطبيق
+GRANT ALL ON ALL TABLES IN SCHEMA public TO anon;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticated;
+
+-- فتح جدار الحماية لكل جدول بشكل صريح ونهائي
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow All" ON public.users;
+CREATE POLICY "Allow All" ON public.users FOR ALL USING (true) WITH CHECK (true);
+
+ALTER TABLE public.companies ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow All" ON public.companies;
+CREATE POLICY "Allow All" ON public.companies FOR ALL USING (true) WITH CHECK (true);
+
+ALTER TABLE public.customers ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow All" ON public.customers;
+CREATE POLICY "Allow All" ON public.customers FOR ALL USING (true) WITH CHECK (true);
+
+ALTER TABLE public.inquiries ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow All" ON public.inquiries;
+CREATE POLICY "Allow All" ON public.inquiries FOR ALL USING (true) WITH CHECK (true);
+
+ALTER TABLE public.interactions ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow All" ON public.interactions;
+CREATE POLICY "Allow All" ON public.interactions FOR ALL USING (true) WITH CHECK (true);
+
+ALTER TABLE public.follow_ups ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow All" ON public.follow_ups;
+CREATE POLICY "Allow All" ON public.follow_ups FOR ALL USING (true) WITH CHECK (true);
+
+ALTER TABLE public.quotations ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow All" ON public.quotations;
+CREATE POLICY "Allow All" ON public.quotations FOR ALL USING (true) WITH CHECK (true);
+
+ALTER TABLE public.inspections ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow All" ON public.inspections;
+CREATE POLICY "Allow All" ON public.inspections FOR ALL USING (true) WITH CHECK (true);
+
+ALTER TABLE public.contracts ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow All" ON public.contracts;
+CREATE POLICY "Allow All" ON public.contracts FOR ALL USING (true) WITH CHECK (true);
+
+ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow All" ON public.payments;
+CREATE POLICY "Allow All" ON public.payments FOR ALL USING (true) WITH CHECK (true);
+
+ALTER TABLE public.sales ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow All" ON public.sales;
+CREATE POLICY "Allow All" ON public.sales FOR ALL USING (true) WITH CHECK (true);

@@ -1,0 +1,6 @@
+{
+  "name": "PVC NESTA AI",
+  "description": "نظام ذكي متكامل لإدارة مبيعات وعمليات شركات قطاعات UPVC والألومنيوم",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
