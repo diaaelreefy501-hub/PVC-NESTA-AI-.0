@@ -450,3 +450,29 @@ CREATE TABLE IF NOT EXISTS public.owner_payments (
   "createdBy" text
 );
 
+-- ============================================================================
+-- 19. PRODUCTS TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.products (
+  id text PRIMARY KEY,
+  "companyId" text NOT NULL,
+  name text NOT NULL,
+  category text DEFAULT 'عام',
+  type text,
+  specifications text,
+  unit text DEFAULT 'متر مربع',
+  price numeric NOT NULL DEFAULT 0,
+  cost numeric,
+  status text DEFAULT 'active',
+  "createdAt" text DEFAULT now()::text,
+  "updatedAt" text DEFAULT now()::text
+);
+
+ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow authenticated read/write on products"
+ON public.products FOR ALL
+TO authenticated
+USING (true)
+WITH CHECK (true);
+
+

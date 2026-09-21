@@ -182,21 +182,21 @@ export const generateEmployeeStatements = (
     const eligibleContractsTotal = eligibleContracts.reduce((sum, d) => sum + d.commissionBase, 0);
     const eligibleCollectionTotal = eligibleContracts.reduce((sum, d) => sum + d.paidAmount, 0);
 
-    // USER REQUIREMENT: إجمالي قيمة العقود المؤهلة للموظف في الشهر × نسبة العمولة = عمولة الشهر
-    // We use the aggregate total to apply the rate once, as requested.
-    const calculatedCommission = Math.round((eligibleContractsTotal * commissionRate) / 100);
-    const commissionEarned = persisted?.commissionEarned !== undefined 
-      ? persisted.commissionEarned 
-      : calculatedCommission;
+    // Derived Commission Calculation (Rule 16: Never allow arbitrary manual override without adjustments)
+    const commissionEarned = Math.round((eligibleContractsTotal * commissionRate) / 100);
 
-    // 4. Adjustments
+    // 4. Adjustments & Deductions
     const monthlyAdjustments = commissionAdjustments.filter(adj => adj.employeeId === employee.id && adj.period === period);
-    const bonuses = monthlyAdjustments.filter(a => a.amount > 0).reduce((sum, a) => sum + a.amount, 0);
-    const deductions = Math.abs(monthlyAdjustments.filter(a => a.amount < 0).reduce((sum, a) => sum + a.amount, 0));
+    const bonuses = monthlyAdjustments
+      .filter(a => a.type === 'bonus' || (a.type !== 'deduction' && a.amount > 0))
+      .reduce((sum, a) => sum + Math.abs(a.amount), 0);
+    const deductions = monthlyAdjustments
+      .filter(a => a.type === 'deduction' || a.amount < 0)
+      .reduce((sum, a) => sum + Math.abs(a.amount), 0);
     const adjustmentsTotal = bonuses - deductions;
 
-    // 5. Total Due
-    const totalDue = salaryDue + commissionEarned + adjustmentsTotal;
+    // 5. Total Due (Net Entitlement = Salary + Commission + Bonuses - Deductions)
+    const totalDue = Math.max(0, salaryDue + commissionEarned + adjustmentsTotal);
 
     // 6. Total Paid
     const paidSalary = salaryPayments
@@ -210,9 +210,18 @@ export const generateEmployeeStatements = (
     const totalPaid = paidSalary + paidCommission;
     const remaining = Math.max(0, totalDue - totalPaid);
     
-    // Status Logic
+    // Status Logic (Draft / Calculated -> Reviewed -> Approved -> Partially Paid / Paid)
     const metadata = employee.monthlyStatements?.find(m => m.period === period);
-    const status = metadata?.status || 'calculated';
+    let status: StatementApprovalStatus = metadata?.status || 'calculated';
+    if (totalDue > 0) {
+      if (totalPaid >= totalDue) {
+        status = 'paid';
+      } else if (totalPaid > 0) {
+        status = 'partially_paid';
+      }
+    } else if (totalPaid > 0) {
+      status = 'paid';
+    }
     const recalculatedAt = metadata?.recalculatedAt;
 
     statements.push({

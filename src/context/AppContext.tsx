@@ -23,6 +23,10 @@ import {
   cleanInspection,
   cleanInspectionUpdate,
   cleanInteraction,
+  cleanOpportunity,
+  cleanOpportunityUpdate,
+  cleanProduct,
+  cleanProductUpdate,
   cleanMonthlyStatement,
   extractContractCollectionStatus,
 } from "../integrations/supabase/sanitizer";
@@ -219,9 +223,13 @@ interface AppContextType {
   recordCommissionPayment: (payment: Omit<CommissionPayment, "id" | "createdAt">) => CommissionPayment;
   deleteSalaryPayment: (id: string) => void;
   deleteCommissionPayment: (id: string) => void;
+  updateSalaryPayment: (payment: SalaryPayment) => Promise<void>;
+  updateCommissionPayment: (payment: CommissionPayment) => Promise<void>;
   addCommissionAdjustment: (adj: Omit<CommissionAdjustment, "id" | "createdAt">) => void;
+  updateCommissionAdjustment: (adj: CommissionAdjustment) => Promise<void>;
   deleteCommissionAdjustment: (employeeId: string, adjustmentId: string) => void;
   updateStatementOverride: (data: Partial<MonthlyStatement> & { employeeId: string; period: string }) => void;
+  reviewStatement: (employeeId: string, period: string) => Promise<void>;
   approveStatement: (employeeId: string, period: string, notes?: string) => void;
   recalculateStatement: (employeeId: string, period: string) => void;
   updateCommissionRate: (employeeId: string, newRate: number, effectivePeriod: string, notes?: string) => void;
@@ -1259,7 +1267,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
       return;
     }
     try {
-      // 1. Fetch user profile first to determine permissions
+      // 1. Fetch user profile specifically by auth UUID (session.user.id)
+      let me: any = currentUser;
+
+      const { data: myProfile, error: myProfileErr } = await supabase
+        .from("users")
+        .select("*")
+        .eq("id", session.user.id)
+        .maybeSingle();
+
+      if (myProfile) {
+        me = {
+          id: myProfile.id,
+          name: myProfile.name,
+          email: myProfile.email,
+          role: myProfile.role,
+          allowedCompanyIds: myProfile.allowedCompanyIds || myProfile.allowed_company_ids || ["all"],
+          active: myProfile.active !== false,
+        };
+      }
+
+      // Fetch the broader team users list for user assignment and team directories
       const usersRes = await supabase.from("users").select("*");
       
       let loadedUsers = usersRes && usersRes.data ? usersRes.data.map((u: any) => ({
@@ -1267,20 +1295,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         name: u.name,
         email: u.email,
         role: u.role,
-        allowedCompanyIds: u.allowed_company_ids || u.allowedCompanyIds || [],
-        active: u.active
+        allowedCompanyIds: u.allowedCompanyIds || u.allowed_company_ids || [],
+        active: u.active !== false,
       })) : [];
       
-      let me = loadedUsers.find((u) => u.id === session.user.id);
+      if (!me && loadedUsers.length > 0) {
+        me = loadedUsers.find((u) => u.id === session.user.id) || null;
+      }
+
+      if ((import.meta as any).env?.DEV && me) {
+        console.log("[AppContext Auth Initialized]:", {
+          authUserId: session.user.id,
+          profileId: me.id,
+          idMatch100: session.user.id === me.id,
+          role: me.role,
+          active: me.active,
+          allowedCompanyIds: me.allowedCompanyIds,
+        });
+      }
       
-      if (!me) {
-        showToast("حسابك غير مسجل أو ليس لديك صلاحية للدخول", "warning");
+      // If profile exists and is explicitly marked inactive
+      if (me && me.active === false) {
+        showToast("حسابك موقوف من قِبل الإدارة، يرجى مراجعة المسؤول", "warning");
         await supabase.auth.signOut();
         return;
       }
 
-      if (me.active === false) {
-        showToast("حسابك موقوف، يرجى مراجعة الإدارة", "warning");
+      // If user profile is not found:
+      if (!me) {
+        // If there was a network/supabase transient error, do NOT sign out!
+        if (myProfileErr || usersRes.error) {
+          console.warn("[AppContext] Transient error querying profile; preserving session:", myProfileErr || usersRes.error);
+          setIsCloudConnected(false);
+          setIsInitialLoading(false);
+          return;
+        }
+
+        // Only sign out if queries cleanly executed and user genuinely does not exist in public.users
+        showToast("حسابك غير مسجل في قاعدة البيانات التشغيلية", "warning");
         await supabase.auth.signOut();
         return;
       }
@@ -1314,6 +1366,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
       let qCommAdj = supabase.from("commission_adjustments").select("*").order("createdAt", { ascending: false });
       let qMonthlyStatements = supabase.from("monthly_statements").select("*");
       let qAudit = supabase.from("audit_logs").select("*").order("timestamp", { ascending: false }).limit(1000);
+      let qOpp = supabase.from("opportunities").select("*").order("createdAt", { ascending: false }).limit(5000);
+      let qProd = supabase.from("products").select("*").order("name");
 
       // Apply isolation strictly if not a super user
       if (!isSuper && companyFilter.length > 0) {
@@ -1333,6 +1387,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         qCommAdj = qCommAdj.in("companyId", companyFilter);
         qMonthlyStatements = qMonthlyStatements.in("companyId", companyFilter);
         qAudit = qAudit.in("companyId", companyFilter);
+        qOpp = qOpp.in("companyId", companyFilter);
+        qProd = qProd.in("companyId", companyFilter);
       } else if (!isSuper && companyFilter.length === 0) {
         // Fallback: user has NO access. Force impossible condition to return empty safely.
         qCompanies = qCompanies.eq("id", "blocked-access");
@@ -1351,6 +1407,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         qCommAdj = qCommAdj.eq("companyId", "blocked-access");
         qMonthlyStatements = qMonthlyStatements.eq("companyId", "blocked-access");
         qAudit = qAudit.eq("companyId", "blocked-access");
+        qOpp = qOpp.eq("companyId", "blocked-access");
+        qProd = qProd.eq("companyId", "blocked-access");
       }
 
       // 3. Execute all queries
@@ -1370,7 +1428,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         commPayRes,
         commAdjRes,
         monthlyStmtRes,
-        auditRes
+        auditRes,
+        oppRes,
+        prodRes
       ] = await Promise.all([
         qCompanies,
         qCust,
@@ -1387,7 +1447,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         qCommPay,
         qCommAdj,
         qMonthlyStatements,
-        qAudit
+        qAudit,
+        qOpp,
+        qProd
       ]);
 
       if (custRes.error) {
@@ -1510,13 +1572,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         const cloudInspections = globalPersistenceEngine.reconcileCloudWithPending((inspectionsRes.data as Inspection[]) || [], "inspection");
         const cloudPayments = globalPersistenceEngine.reconcileCloudWithPending((payRes.data as Payment[]) || [], "payment");
         
+        if (prodRes && prodRes.data && Array.isArray(prodRes.data) && prodRes.data.length > 0) {
+          const cloudProducts = globalPersistenceEngine.reconcileCloudWithPending((prodRes.data as Product[]) || [], "product");
+          setProducts(cloudProducts);
+        }
+
+        const deletedSet = new Set(deletedOpportunityIds);
+        let cloudOpportunitiesFromTable: Opportunity[] = [];
+        if (oppRes && oppRes.data && Array.isArray(oppRes.data)) {
+          cloudOpportunitiesFromTable = (oppRes.data as Opportunity[]).filter(
+            (o) => Boolean(o && !deletedSet.has(o.id) && (o.status === "open" || o.status === "lost" || o.status === "won"))
+          );
+        }
+
         let loadedOpportunities: Opportunity[] = [];
         let normalInteractions: Interaction[] = [];
         if (interactionsRes.data) {
           const cloudInteractions = interactionsRes.data as Interaction[];
           normalInteractions = cloudInteractions.filter((i) => (i.type as string) !== "opportunity_sync");
-          const deletedSet = new Set(deletedOpportunityIds);
-          const cloudOpportunities: Opportunity[] = cloudInteractions
+          const cloudOpportunitiesFromSync: Opportunity[] = cloudInteractions
             .filter((i) => (i.type as string) === "opportunity_sync")
             .map((i) => {
               try {
@@ -1528,7 +1602,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
             .filter((o): o is Opportunity => Boolean(o && !deletedSet.has(o.id) && (o.status === "open" || o.status === "lost" || o.status === "won")));
 
           setInteractions(normalInteractions);
-          loadedOpportunities = cloudOpportunities;
+
+          // Merge: Table opportunities take priority, sync backup supplements missing ones
+          const tableOppMap = new Map(cloudOpportunitiesFromTable.map((o) => [o.id, o]));
+          for (const syncOpp of cloudOpportunitiesFromSync) {
+            if (!tableOppMap.has(syncOpp.id)) {
+              tableOppMap.set(syncOpp.id, syncOpp);
+            }
+          }
+          loadedOpportunities = Array.from(tableOppMap.values());
+        } else {
+          loadedOpportunities = cloudOpportunitiesFromTable;
         }
 
         // Reconcile and auto-heal the sales pipeline
@@ -2429,6 +2513,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
     [executeUnifiedAction, commissionPayments]
   );
 
+  const updateSalaryPayment = useCallback(
+    async (payment: SalaryPayment) => {
+      await executeUnifiedAction({
+        entityType: "salary_payment",
+        recordId: payment.id,
+        companyId: payment.companyId,
+        action: "update",
+        payload: payment,
+        description: `تعديل حركة صرف راتب للموظف: ${payment.employeeName} بقيمة ${payment.amount.toLocaleString()} ج.م`,
+        applyLocal: () => {
+          setSalaryPayments((prev) => prev.map((p) => p.id === payment.id ? payment : p));
+        },
+        toastMessage: "تم تحديث حركة صرف الراتب بنجاح",
+      });
+    },
+    [executeUnifiedAction]
+  );
+
+  const updateCommissionPayment = useCallback(
+    async (payment: CommissionPayment) => {
+      await executeUnifiedAction({
+        entityType: "commission_payment",
+        recordId: payment.id,
+        companyId: payment.companyId,
+        action: "update",
+        payload: payment,
+        description: `تعديل حركة صرف عمولة للموظف: ${payment.employeeName} بقيمة ${payment.amount.toLocaleString()} ج.م`,
+        applyLocal: () => {
+          setCommissionPayments((prev) => prev.map((p) => p.id === payment.id ? payment : p));
+        },
+        toastMessage: "تم تحديث حركة صرف العمولة بنجاح",
+      });
+    },
+    [executeUnifiedAction]
+  );
+
   const addCommissionAdjustment = useCallback(
     async (adj: Omit<CommissionAdjustment, "id" | "createdAt">) => {
       const newAdj: CommissionAdjustment = {
@@ -2460,6 +2580,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
       });
     },
     [executeUnifiedAction]
+  );
+
+  const updateCommissionAdjustment = useCallback(
+    async (adj: CommissionAdjustment) => {
+      const emp = employees.find(e => e.id === adj.employeeId);
+      if (!emp) return;
+
+      await executeUnifiedAction({
+        entityType: "commission_adjustment",
+        recordId: adj.id,
+        companyId: adj.companyId,
+        action: "update",
+        payload: adj,
+        description: `تعديل تسوية مالية للعمولة بقيمة ${adj.amount.toLocaleString()} ج.م للموظف: ${emp.name}`,
+        applyLocal: () => {
+          setEmployees((prev) =>
+            prev.map((e) =>
+              e.id === adj.employeeId
+                ? {
+                    ...e,
+                    commissionAdjustments: (e.commissionAdjustments || []).map((a) =>
+                      a.id === adj.id ? adj : a
+                    ),
+                  }
+                : e
+            )
+          );
+        },
+        toastMessage: "تم تعديل التسوية المالية بنجاح",
+      });
+    },
+    [executeUnifiedAction, employees]
   );
 
   const deleteCommissionAdjustment = useCallback(
@@ -2565,6 +2717,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
       });
     },
     [executeUnifiedAction, employees, currentUser]
+  );
+
+  const reviewStatement = useCallback(
+    async (employeeId: string, period: string) => {
+      const emp = employees.find(e => e.id === employeeId);
+      const stmt = employeeStatements[employeeId]?.find(s => s.period === period);
+      if (!emp || !stmt) return;
+
+      const stableId = stmt.id || `stmt-${employeeId}-${period}`;
+      const updatedStmt: MonthlyStatement = {
+        ...stmt,
+        id: stableId,
+        status: 'reviewed',
+        reviewedAt: new Date().toISOString(),
+        reviewedBy: currentUser?.name || "المراجع المالي",
+      };
+
+      await executeUnifiedAction({
+        entityType: "monthly_statement",
+        recordId: stableId,
+        companyId: emp.companyId,
+        action: "create", // Always use create (UPSERT)
+        description: `مراجعة وتدقيق كشف استحقاق ${period} للموظف: ${emp.name}`,
+        payload: updatedStmt,
+        applyLocal: () => {
+          setEmployees(prev => prev.map(e => {
+            if (e.id !== employeeId) return e;
+            const stmts = (e.monthlyStatements || []).filter(s => s.period !== period);
+            return {
+              ...e,
+              monthlyStatements: [...stmts, updatedStmt]
+            };
+          }));
+        },
+        toastMessage: "تمت مراجعة الكشف المالي بنجاح",
+      });
+    },
+    [executeUnifiedAction, employees, employeeStatements, currentUser]
   );
 
   const approveStatement = useCallback(
@@ -7656,7 +7846,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
     setSales(initialSales);
     setInteractions(initialInteractions);
     setImportHistory([]);
-    localStorage.clear();
+    // Clean only app-specific items, strictly preserving Supabase auth tokens (sb-*)
+    Object.keys(localStorage)
+      .filter((k) => k.startsWith(STORAGE_PREFIX))
+      .forEach((k) => localStorage.removeItem(k));
     showToast("تمت استعادة البيانات الافتراضية بنجاح", "info");
   };
 
@@ -8173,72 +8366,71 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         version: 1,
         status: data.status || "active",
       };
-      setProducts((prev) => [newProduct, ...prev]);
 
-      addAuditLog({
-        actionType: "create_record",
+      executeUnifiedAction({
         entityType: "product",
-        entityId: newProduct.id,
+        recordId: newProduct.id,
         companyId: newProduct.companyId || "all",
+        action: "insert",
+        payload: cleanProduct(newProduct),
         description: `إضافة منتج جديد: ${newProduct.name} (${newProduct.category})`,
+        applyLocal: () => {
+          setProducts((prev) => [newProduct, ...prev]);
+        },
       });
 
-      showToast(`تمت إضافة المنتج "${newProduct.name}" بنجاح`, "success");
       return newProduct;
     },
-    [addAuditLog, showToast]
+    [executeUnifiedAction]
   );
 
   const updateProduct = useCallback(
     (id: string, updates: Partial<Product>) => {
+      const target = products.find((p) => p.id === id);
+      if (!target) return;
       const now = new Date().toISOString();
-      let updatedProd: Product | undefined;
-      setProducts((prev) =>
-        prev.map((p) => {
-          if (p.id === id) {
-            updatedProd = {
-              ...p,
-              ...updates,
-              updatedAt: now,
-              version: (p.version || 1) + 1,
-            };
-            return updatedProd;
-          }
-          return p;
-        })
-      );
+      const updatedProd: Product = {
+        ...target,
+        ...updates,
+        updatedAt: now,
+        version: (target.version || 1) + 1,
+      };
 
-      if (updatedProd) {
-        addAuditLog({
-          actionType: "edit_record",
-          entityType: "product",
-          entityId: id,
-          companyId: updatedProd.companyId || "all",
-          description: `تحديث بيانات المنتج: ${updatedProd.name}`,
-        });
-        showToast(`تم تحديث المنتج "${updatedProd.name}" بنجاح`, "success");
-      }
+      executeUnifiedAction({
+        entityType: "product",
+        recordId: id,
+        companyId: target.companyId || "all",
+        action: "update",
+        payload: cleanProductUpdate(updates),
+        previousData: target,
+        description: `تحديث بيانات المنتج: ${target.name}`,
+        applyLocal: () => {
+          setProducts((prev) => prev.map((p) => (p.id === id ? updatedProd : p)));
+        },
+      });
     },
-    [addAuditLog, showToast]
+    [products, executeUnifiedAction]
   );
 
   const deleteProduct = useCallback(
     (id: string) => {
       const target = products.find((p) => p.id === id);
-      setProducts((prev) => prev.filter((p) => p.id !== id));
+      if (!target) return;
 
-      if (target) {
-        addAuditLog({
-          actionType: "delete_record",
-          entityType: "product",
-          entityId: id,
-          companyId: target.companyId || "all",
-          description: `حذف المنتج: ${target.name}`,
-        });
-        showToast(`تم حذف المنتج "${target.name}" بنجاح`, "info");
-      }
+      executeUnifiedAction({
+        entityType: "product",
+        recordId: id,
+        companyId: target.companyId || "all",
+        action: "delete",
+        payload: { id },
+        previousData: target,
+        description: `حذف المنتج: ${target.name}`,
+        applyLocal: () => {
+          setProducts((prev) => prev.filter((p) => p.id !== id));
+        },
+      });
     },
-    [products, addAuditLog, showToast]
+    [products, executeUnifiedAction]
   );
 
   // Tasks CRUD Operations
@@ -8437,9 +8629,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         recordCommissionPayment,
         deleteSalaryPayment,
         deleteCommissionPayment,
+        updateSalaryPayment,
+        updateCommissionPayment,
         addCommissionAdjustment,
+        updateCommissionAdjustment,
         deleteCommissionAdjustment,
         updateStatementOverride,
+        reviewStatement,
         approveStatement,
         recalculateStatement,
         syncAllMonthlyStatements,

@@ -39,14 +39,26 @@ import { FinanceView } from "./components/finance/FinanceView";
 import { ReportsView } from "./components/reports/ReportsView";
 
 const MainContent: React.FC = () => {
-  const { currentTab, setCurrentTab, isIntakeModalOpen, setIsIntakeModalOpen, toast, currentUser, currentCompanyRole } = useApp();
+  const { currentTab, setCurrentTab, isIntakeModalOpen, setIsIntakeModalOpen, toast, currentUser, currentCompanyRole, isInitialLoading } = useApp();
 
-  // Redirect if unauthorized tab is opened
+  // Redirect if unauthorized tab is opened (Always declare hooks unconditionally before any early return)
   useEffect(() => {
     if (currentUser && !canAccessTab(currentTab, currentUser, currentCompanyRole)) {
       setCurrentTab("dashboard");
     }
   }, [currentTab, currentUser, currentCompanyRole, setCurrentTab]);
+
+  // Smooth loading screen while profile & permissions initialize, preventing layout flashes or premature unauthorized redirects
+  if (isInitialLoading && !currentUser) {
+    return (
+      <div className="min-h-screen bg-[#0C0D0E] flex flex-col items-center justify-center space-y-4" dir="rtl">
+        <div className="w-14 h-14 rounded-2xl bg-[#C8A75A]/10 border border-[#C8A75A]/30 flex items-center justify-center text-[#C8A75A] shadow-lg">
+          <Loader2 className="w-7 h-7 animate-spin" />
+        </div>
+        <p className="text-[#A1A1AA] text-sm font-medium">جاري إعداد مساحة العمل والبيانات التشغيلية...</p>
+      </div>
+    );
+  }
 
   const renderActiveView = () => {
     if (currentUser && !canAccessTab(currentTab, currentUser, currentCompanyRole)) {
@@ -180,17 +192,34 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check active session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
+    // 1. Check active session on initial load/refresh
+    supabase.auth.getSession().then(({ data: { session: initialSession } }) => {
+      if ((import.meta as any).env?.DEV) {
+        console.log("[Auth Initial getSession]:", {
+          hasSession: !!initialSession,
+          authUserId: initialSession?.user?.id,
+          email: initialSession?.user?.email,
+          hasAccessToken: !!initialSession?.access_token,
+        });
+      }
+      setSession(initialSession);
       setLoading(false);
     });
 
-    // Listen for auth changes
+    // 2. Listen for auth changes (SIGNED_IN, SIGNED_OUT, INITIAL_SESSION, TOKEN_REFRESHED)
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
+    } = supabase.auth.onAuthStateChange((event, currentSession) => {
+      if ((import.meta as any).env?.DEV) {
+        console.log("[Auth onAuthStateChange]:", event, {
+          hasSession: !!currentSession,
+          authUserId: currentSession?.user?.id,
+          email: currentSession?.user?.email,
+        });
+      }
+
+      setSession(currentSession);
+      setLoading(false);
     });
 
     return () => subscription.unsubscribe();

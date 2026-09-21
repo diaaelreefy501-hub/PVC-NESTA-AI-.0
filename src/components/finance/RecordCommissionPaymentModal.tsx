@@ -87,6 +87,11 @@ export const RecordCommissionPaymentModal: React.FC<RecordCommissionPaymentModal
       return;
     }
 
+    if (remainingCommission > 0 && payAmount > remainingCommission) {
+      showToast(`لا يمكن صرف عمولة (${payAmount.toLocaleString()} ج.م) تتجاوز العمولة المتبقية المستحقة (${remainingCommission.toLocaleString()} ج.م). لمنع الرصيد السالب.`, "warning");
+      return;
+    }
+
     const contractSourceDesc = selectedContract
       ? `عقد رقم ${selectedContract.contractNumber || selectedContract.id.slice(0, 8)} - العميل: ${selectedContract.customerName}`
       : "حافز أداء ومبيعات عام";

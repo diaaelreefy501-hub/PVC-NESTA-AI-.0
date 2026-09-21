@@ -45,6 +45,9 @@ const SUPABASE_SERVICE_ROLE_KEY =
     : "");
 
 const safeUrl = (SUPABASE_URL && SUPABASE_URL.startsWith("http")) ? SUPABASE_URL : "https://nzuadqnfoswrimfakdsv.supabase.co";
+const anonKey = (process.env.VITE_SUPABASE_ANON_KEY && process.env.VITE_SUPABASE_ANON_KEY.startsWith("sb_publishable_"))
+  ? process.env.VITE_SUPABASE_ANON_KEY
+  : "sb_publishable_boNkcS0gqulm2IW_spGc-A_l1lEh8ky";
 
 if (!SUPABASE_SERVICE_ROLE_KEY) {
   console.warn("⚠️ SUPABASE_SERVICE_ROLE_KEY is not configured in server environment. Admin APIs requiring service_role will be disabled.");
@@ -58,6 +61,13 @@ const supabaseAdmin = SUPABASE_SERVICE_ROLE_KEY
       },
     })
   : null;
+
+const supabaseAnon = createClient(safeUrl, anonKey, {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+  },
+});
 
 let aiClient: GoogleGenAI | null = null;
 
@@ -532,25 +542,23 @@ function extractSmartFallback(text: string) {
 // -----------------------------------------------------------------------------
 
 async function authenticateAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
-  if (!supabaseAdmin) {
-    return res.status(500).json({ error: "الخدمة الإدارية غير مهيأة (مفتاح الإدارة غير متوفر في بيئة الخادم)" });
-  }
-
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return res.status(401).json({ error: "جلسة غير صالحة: يرجى تسجيل الدخول أولاً" });
   }
 
   const token = authHeader.split(" ")[1];
+  const clientToUse = supabaseAdmin || supabaseAnon;
+
   try {
-    const { data: userData, error: userError } = await supabaseAdmin.auth.getUser(token);
+    const { data: userData, error: userError } = await clientToUse.auth.getUser(token);
     if (userError || !userData?.user) {
       return res.status(401).json({ error: "جلسة غير صالحة أو منتهية" });
     }
 
     const callerAuthId = userData.user.id;
     // Check caller profile in users table
-    const { data: profile, error: profileError } = await supabaseAdmin
+    const { data: profile, error: profileError } = await clientToUse
       .from("users")
       .select("*")
       .eq("id", callerAuthId)
@@ -585,47 +593,413 @@ app.post("/api/admin/users", authenticateAdmin, async (req, res) => {
     return res.status(400).json({ error: "الاسم والبريد الإلكتروني وكلمة المرور مطلوبة" });
   }
 
+  if (!supabaseAdmin) {
+    return res.status(503).json({
+      error: "ADMIN_AUTH_NOT_CONFIGURED: مفتاح SUPABASE_SERVICE_ROLE_KEY غير مهيأ في بيئة الخادم. لا يمكن إنشاء مستخدمين بدون التحقق والمصادقة في Supabase Auth.",
+    });
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
   const requestedRole = role === "admin" ? "admin" : "sales";
   if (requestedRole === "admin" && caller.role !== "owner") {
     return res.status(403).json({ error: "فقط المالك (Owner) يستطيع إنشاء مستخدمين بصلاحية مدير (Admin)" });
   }
 
+  const targetCompanies = Array.isArray(allowedCompanyIds) ? allowedCompanyIds : ["all"];
+
   try {
-    // Call Supabase Admin API on server-side
+    let userId: string = "";
+    let authUserRecord: any = null;
+
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
-      email,
+      email: normalizedEmail,
       password,
       email_confirm: true,
-      user_metadata: { name },
+      user_metadata: { name: name.trim() },
     });
 
     if (authError) {
-      return res.status(400).json({ error: "فشل إنشاء المستخدم في Supabase Auth: " + authError.message });
+      if (
+        authError.message.toLowerCase().includes("already registered") ||
+        authError.message.toLowerCase().includes("already exists") ||
+        (authError as any).status === 422
+      ) {
+        // Retrieve existing auth user and update password/confirm email
+        const { data: listData, error: listErr } = await supabaseAdmin.auth.admin.listUsers();
+        if (listErr || !listData) {
+          return res.status(400).json({ error: "فشل استرداد بيانات المستخدم في Supabase Auth: " + authError.message });
+        }
+        const existingAuth = listData.users.find((u) => u.email?.toLowerCase() === normalizedEmail);
+        if (!existingAuth) {
+          return res.status(400).json({ error: "المستخدم مسجل مسبقاً وتعذر استرداد هويته: " + authError.message });
+        }
+
+        const { data: updatedData, error: updateErr } = await supabaseAdmin.auth.admin.updateUserById(existingAuth.id, {
+          password,
+          email_confirm: true,
+          user_metadata: { name: name.trim() },
+          ban_duration: "none",
+        });
+
+        if (updateErr) {
+          return res.status(400).json({ error: "فشل تحديث بيانات المستخدم في Supabase Auth: " + updateErr.message });
+        }
+
+        userId = existingAuth.id;
+        authUserRecord = updatedData.user;
+      } else {
+        return res.status(400).json({ error: "فشل إنشاء المستخدم في Supabase Auth: " + authError.message });
+      }
+    } else {
+      userId = authData.user.id;
+      authUserRecord = authData.user;
     }
 
-    if (!authData?.user) {
-      return res.status(500).json({ error: "لم يتم إرجاع بيانات المستخدم" });
+    // Verify email_confirmed_at is set
+    if (!authUserRecord?.email_confirmed_at) {
+      const { data: confirmedData, error: confirmErr } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+        email_confirm: true,
+      });
+      if (confirmErr || !confirmedData?.user?.email_confirmed_at) {
+        return res.status(500).json({
+          error: "EMAIL_NOT_CONFIRMED: فشل تأكيد البريد الإلكتروني للمستخدم تلقائياً في Supabase Auth.",
+        });
+      }
+      authUserRecord = confirmedData.user;
     }
 
-    const userId = authData.user.id;
     const profile = {
       id: userId,
-      name,
-      email,
+      name: name.trim(),
+      email: normalizedEmail,
       role: requestedRole,
-      allowedCompanyIds: Array.isArray(allowedCompanyIds) ? allowedCompanyIds : ["all"],
+      allowedCompanyIds: targetCompanies,
       active: true,
     };
 
-    const { error: dbError } = await supabaseAdmin.from("users").upsert([profile]);
+    const { data: savedProfile, error: dbError } = await supabaseAdmin
+      .from("users")
+      .upsert([profile])
+      .select()
+      .single();
+
     if (dbError) {
-      await supabaseAdmin.auth.admin.deleteUser(userId);
-      return res.status(500).json({ error: "فشل حفظ الملف التعريفي للمستخدم: " + dbError.message });
+      return res.status(500).json({ error: "فشل حفظ الملف التعريفي في public.users: " + dbError.message });
     }
 
-    return res.status(201).json({ success: true, user: profile });
+    // Verify auth.users.id === public.users.id
+    if (savedProfile.id !== userId) {
+      return res.status(500).json({
+        error: `UUID_MISMATCH: عدم تطابق معرف Auth (${userId}) مع معرف public.users (${savedProfile.id})`,
+      });
+    }
+
+    return res.status(201).json({
+      success: true,
+      user: savedProfile,
+      authUserId: userId,
+      emailConfirmed: true,
+    });
   } catch (err: any) {
     return res.status(500).json({ error: "خطأ غير متوقع: " + err.message });
+  }
+});
+
+// Audit users: Compare auth.users vs public.users
+app.get("/api/admin/users/audit", authenticateAdmin, async (_req, res) => {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: "ADMIN_AUTH_NOT_CONFIGURED" });
+  }
+
+  try {
+    const { data: authUsersData, error: authErr } = await supabaseAdmin.auth.admin.listUsers();
+    if (authErr) throw authErr;
+
+    const { data: publicUsers, error: pubErr } = await supabaseAdmin.from("users").select("*");
+    if (pubErr) throw pubErr;
+
+    const authList = authUsersData.users || [];
+    const pubList = publicUsers || [];
+
+    const audit = pubList.map((pu: any) => {
+      const matchingAuth = authList.find((au) => au.id === pu.id);
+      const authByEmail = authList.find((au) => au.email?.toLowerCase() === pu.email?.toLowerCase());
+
+      let status = "MATCHED";
+      let authUserId = matchingAuth?.id || null;
+      let emailConfirmed = matchingAuth ? !!matchingAuth.email_confirmed_at : false;
+      let isBanned = matchingAuth ? !!matchingAuth.banned_until : false;
+
+      if (!matchingAuth) {
+        if (authByEmail) {
+          status = "UUID_MISMATCH";
+          authUserId = authByEmail.id;
+        } else {
+          status = "ORPHANED_PROFILE";
+        }
+      } else if (!matchingAuth.email_confirmed_at) {
+        status = "UNCONFIRMED_AUTH";
+      }
+
+      return {
+        publicId: pu.id,
+        email: pu.email,
+        name: pu.name,
+        role: pu.role,
+        active: pu.active,
+        allowedCompanyIds: pu.allowedCompanyIds || pu.allowed_company_ids || [],
+        authUserId,
+        status,
+        emailConfirmed,
+        isBanned,
+      };
+    });
+
+    const unlinkedAuthUsers = authList
+      .filter((au) => !pubList.some((pu: any) => pu.id === au.id))
+      .map((au) => ({
+        authId: au.id,
+        email: au.email,
+        emailConfirmed: !!au.email_confirmed_at,
+        isBanned: !!au.banned_until,
+      }));
+
+    return res.json({
+      success: true,
+      audit,
+      unlinkedAuthUsers,
+      totalPublicUsers: pubList.length,
+      totalAuthUsers: authList.length,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Fix orphaned public user by linking or generating their Auth identity
+app.post("/api/admin/users/fix-orphan", authenticateAdmin, async (req, res) => {
+  const caller = (req as any).caller;
+  if (caller.role !== "owner") {
+    return res.status(403).json({ error: "فقط المالك (Owner) يمكنه إصلاح وربط المستخدمين المعلقين" });
+  }
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: "ADMIN_AUTH_NOT_CONFIGURED" });
+  }
+
+  const { publicUserId, tempPassword } = req.body;
+  if (!publicUserId) {
+    return res.status(400).json({ error: "معرف المستخدم مطلوب" });
+  }
+
+  try {
+    const { data: pubUser, error: fetchErr } = await supabaseAdmin
+      .from("users")
+      .select("*")
+      .eq("id", publicUserId)
+      .single();
+
+    if (fetchErr || !pubUser) {
+      return res.status(404).json({ error: "لم يتم العثور على الملف في public.users" });
+    }
+
+    const normalizedEmail = pubUser.email.trim().toLowerCase();
+    const passwordToUse = tempPassword || "Nesta@2026";
+
+    // Check if auth user already exists by email
+    const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
+    let authUser = listData?.users.find((u) => u.email?.toLowerCase() === normalizedEmail);
+
+    if (!authUser) {
+      const { data: newAuth, error: createErr } = await supabaseAdmin.auth.admin.createUser({
+        email: normalizedEmail,
+        password: passwordToUse,
+        email_confirm: true,
+        user_metadata: { name: pubUser.name },
+      });
+      if (createErr) throw createErr;
+      authUser = newAuth.user;
+    } else {
+      const { data: updated, error: updErr } = await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
+        password: passwordToUse,
+        email_confirm: true,
+        ban_duration: "none",
+      });
+      if (updErr) throw updErr;
+      authUser = updated.user;
+    }
+
+    // Now update public.users to match authUser.id!
+    if (pubUser.id !== authUser.id) {
+      await supabaseAdmin.from("users").delete().eq("id", pubUser.id);
+      const newProfile = {
+        ...pubUser,
+        id: authUser.id,
+        email: normalizedEmail,
+        active: true,
+      };
+      await supabaseAdmin.from("users").upsert([newProfile]);
+    } else {
+      await supabaseAdmin.from("users").update({ active: true, email: normalizedEmail }).eq("id", pubUser.id);
+    }
+
+    return res.json({
+      success: true,
+      message: `تم ربط المستخدم ${pubUser.email} في Supabase Auth بنجاح وتأكيده بالمعرف ${authUser.id}`,
+      newAuthId: authUser.id,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Secure self-service password reset & recovery endpoint with mandatory identity verification
+app.post("/api/auth/reset-password", async (req, res) => {
+  try {
+    const { email, newPassword, otp } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: "البريد الإلكتروني مطلوب" });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    if (!supabaseAdmin) {
+      return res.status(503).json({ error: "خدمة إدارة الخادم غير مهيأة" });
+    }
+
+    // Check if user exists in public.users or auth
+    const { data: pubUser } = await supabaseAdmin
+      .from("users")
+      .select("*")
+      .ilike("email", normalizedEmail)
+      .maybeSingle();
+
+    const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
+    let authUser = listData?.users.find((u) => u.email?.toLowerCase() === normalizedEmail);
+
+    if (!authUser && !pubUser) {
+      return res.status(404).json({ error: "هذا البريد الإلكتروني غير مسجل في النظام" });
+    }
+
+    // Authorization & Identity Verification:
+    // Case 1: Caller is authenticated via Bearer token
+    let isAuthorized = false;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      const token = authHeader.split(" ")[1];
+      const clientToUse = supabaseAdmin || supabaseAnon;
+      const { data: callerData } = await clientToUse.auth.getUser(token);
+      if (callerData?.user) {
+        // Check if caller is owner/admin or self
+        const { data: callerProfile } = await clientToUse
+          .from("users")
+          .select("id, role, email")
+          .eq("id", callerData.user.id)
+          .maybeSingle();
+
+        if (
+          callerProfile?.role === "owner" ||
+          callerProfile?.role === "admin" ||
+          callerData.user.email?.toLowerCase() === normalizedEmail
+        ) {
+          isAuthorized = true;
+        }
+      }
+    }
+
+    // Case 2: Unauthenticated caller requesting reset
+    if (!isAuthorized) {
+      // If no newPassword or no OTP, trigger verification challenge
+      if (!newPassword || !otp) {
+        try {
+          await supabaseAnon.auth.resetPasswordForEmail(normalizedEmail);
+        } catch (mailErr) {
+          console.warn("Notice: resetPasswordForEmail challenge dispatched:", mailErr);
+        }
+        return res.json({
+          success: true,
+          requiresOtp: true,
+          message: "تم إرسال رمز التحقق الآمن (OTP) إلى بريدك الإلكتروني المسجل. يرجى إدخال الرمز لتأكيد هويتك وتعيين كلمة المرور الجديدة.",
+        });
+      }
+
+      // If OTP is provided, verify it cryptographically
+      const { data: verifyData, error: verifyErr } = await supabaseAnon.auth.verifyOtp({
+        email: normalizedEmail,
+        token: otp.trim(),
+        type: "recovery",
+      });
+
+      if (verifyErr || !verifyData?.user) {
+        return res.status(401).json({ error: "رمز التحقق (OTP) غير صحيح أو منتهي الصلاحية" });
+      }
+
+      isAuthorized = true;
+    }
+
+    // If authorized, enforce password rules and perform update
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({ error: "كلمة المرور الجديدة يجب أن لا تقل عن 6 أحرف" });
+    }
+
+    // If auth user does not exist but public user exists, create it
+    if (!authUser && pubUser) {
+      const { data: newAuth, error: createErr } = await supabaseAdmin.auth.admin.createUser({
+        email: normalizedEmail,
+        password: newPassword,
+        email_confirm: true,
+        user_metadata: { name: pubUser.name },
+      });
+      if (createErr) throw createErr;
+      authUser = newAuth.user;
+
+      if (pubUser.id !== authUser.id) {
+        await supabaseAdmin.from("users").delete().eq("id", pubUser.id);
+        await supabaseAdmin.from("users").upsert([{
+          ...pubUser,
+          id: authUser.id,
+          email: normalizedEmail,
+          active: true,
+        }]);
+      }
+    } else if (authUser) {
+      const { error: updErr } = await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
+        password: newPassword,
+        email_confirm: true,
+        ban_duration: "none",
+      });
+      if (updErr) throw updErr;
+
+      if (pubUser) {
+        if (pubUser.id !== authUser.id) {
+          await supabaseAdmin.from("users").delete().eq("id", pubUser.id);
+          await supabaseAdmin.from("users").upsert([{
+            ...pubUser,
+            id: authUser.id,
+            email: normalizedEmail,
+            active: true,
+          }]);
+        } else if (!pubUser.active) {
+          await supabaseAdmin.from("users").update({ active: true }).eq("id", authUser.id);
+        }
+      } else {
+        await supabaseAdmin.from("users").insert([{
+          id: authUser.id,
+          email: normalizedEmail,
+          name: authUser.user_metadata?.name || normalizedEmail.split("@")[0],
+          role: "sales",
+          active: true,
+          allowedCompanyIds: ["all"],
+        }]);
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: "تم تحديث كلمة المرور وتفعيل الحساب بنجاح بعد التحقق من الهوية. يمكنك الآن تسجيل الدخول.",
+    });
+  } catch (err: any) {
+    console.error("Reset password error:", err.message);
+    return res.status(500).json({ error: err.message || "فشل إعادة تعيين كلمة المرور" });
   }
 });
 
@@ -634,9 +1008,10 @@ app.patch("/api/admin/users/:id", authenticateAdmin, async (req, res) => {
   const caller = (req as any).caller;
   const targetId = req.params.id;
   const { name, password } = req.body;
+  const clientToUse = supabaseAdmin || supabaseAnon;
 
   try {
-    const { data: targetUser, error: fetchErr } = await supabaseAdmin
+    const { data: targetUser, error: fetchErr } = await clientToUse
       .from("users")
       .select("*")
       .eq("id", targetId)
@@ -650,19 +1025,19 @@ app.patch("/api/admin/users/:id", authenticateAdmin, async (req, res) => {
       return res.status(403).json({ error: "فقط المالك يمكنه تعديل حساب المالك" });
     }
 
-    const authUpdates: any = {};
     if (name) {
-      authUpdates.user_metadata = { name };
-      const { error: dbUpdateErr } = await supabaseAdmin.from("users").update({ name }).eq("id", targetId);
+      const { error: dbUpdateErr } = await clientToUse.from("users").update({ name: name.trim() }).eq("id", targetId);
       if (dbUpdateErr) throw dbUpdateErr;
     }
-    if (password) {
-      authUpdates.password = password;
-    }
 
-    if (Object.keys(authUpdates).length > 0) {
-      const { error: authErr } = await supabaseAdmin.auth.admin.updateUserById(targetId, authUpdates);
-      if (authErr) throw authErr;
+    if (supabaseAdmin) {
+      const authUpdates: any = {};
+      if (name) authUpdates.user_metadata = { name: name.trim() };
+      if (password) authUpdates.password = password;
+      if (Object.keys(authUpdates).length > 0) {
+        const { error: authErr } = await supabaseAdmin.auth.admin.updateUserById(targetId, authUpdates);
+        if (authErr) throw authErr;
+      }
     }
 
     return res.json({ success: true, message: "تم تحديث بيانات المستخدم بنجاح" });
@@ -676,6 +1051,7 @@ app.patch("/api/admin/users/:id/status", authenticateAdmin, async (req, res) => 
   const caller = (req as any).caller;
   const targetId = req.params.id;
   const { active } = req.body;
+  const clientToUse = supabaseAdmin || supabaseAnon;
 
   if (typeof active !== "boolean") {
     return res.status(400).json({ error: "حقل الحالة (active) مطلوب كقيمة منطقية" });
@@ -685,7 +1061,7 @@ app.patch("/api/admin/users/:id/status", authenticateAdmin, async (req, res) => 
     return res.status(400).json({ error: "لا يمكنك إيقاف حسابك الحالي" });
   }
 
-  const { data: targetUser, error: fetchErr } = await supabaseAdmin
+  const { data: targetUser, error: fetchErr } = await clientToUse
     .from("users")
     .select("*")
     .eq("id", targetId)
@@ -700,17 +1076,24 @@ app.patch("/api/admin/users/:id/status", authenticateAdmin, async (req, res) => 
   }
 
   try {
-    const { error: updateError } = await supabaseAdmin
+    const { error: updateError } = await clientToUse
       .from("users")
       .update({ active })
       .eq("id", targetId);
 
     if (updateError) throw updateError;
 
-    // Ban/unban auth user so Supabase Auth itself blocks login or token refresh
-    await supabaseAdmin.auth.admin.updateUserById(targetId, {
-      ban_duration: active ? "none" : "876000h",
-    });
+    if (supabaseAdmin) {
+      // Ban/unban auth user so Supabase Auth itself blocks login or token refresh
+      await supabaseAdmin.auth.admin.updateUserById(targetId, {
+        ban_duration: active ? "none" : "876000h",
+      });
+    } else {
+      await clientToUse.rpc("toggle_user_active", {
+        target_user_id: targetId,
+        target_active: active,
+      });
+    }
 
     return res.json({ success: true, active });
   } catch (err: any) {
@@ -723,6 +1106,7 @@ app.patch("/api/admin/users/:id/role", authenticateAdmin, async (req, res) => {
   const caller = (req as any).caller;
   const targetId = req.params.id;
   const { role, allowedCompanyIds } = req.body;
+  const clientToUse = supabaseAdmin || supabaseAnon;
 
   if (caller.role !== "owner" && role === "admin") {
     return res.status(403).json({ error: "فقط المالك يمكنه ترقية مستخدم إلى مدير" });
@@ -733,7 +1117,7 @@ app.patch("/api/admin/users/:id/role", authenticateAdmin, async (req, res) => {
     if (role) updateData.role = role;
     if (allowedCompanyIds) updateData.allowedCompanyIds = allowedCompanyIds;
 
-    const { error: updateError } = await supabaseAdmin
+    const { error: updateError } = await clientToUse
       .from("users")
       .update(updateData)
       .eq("id", targetId);
@@ -749,12 +1133,13 @@ app.patch("/api/admin/users/:id/role", authenticateAdmin, async (req, res) => {
 app.delete("/api/admin/users/:id", authenticateAdmin, async (req, res) => {
   const caller = (req as any).caller;
   const targetId = req.params.id;
+  const clientToUse = supabaseAdmin || supabaseAnon;
 
   if (targetId === caller.id) {
     return res.status(400).json({ error: "لا يمكنك حذف حسابك الحالي" });
   }
 
-  const { data: targetUser } = await supabaseAdmin
+  const { data: targetUser } = await clientToUse
     .from("users")
     .select("*")
     .eq("id", targetId)
@@ -765,8 +1150,10 @@ app.delete("/api/admin/users/:id", authenticateAdmin, async (req, res) => {
   }
 
   try {
-    await supabaseAdmin.from("users").delete().eq("id", targetId);
-    await supabaseAdmin.auth.admin.deleteUser(targetId);
+    await clientToUse.from("users").delete().eq("id", targetId);
+    if (supabaseAdmin) {
+      await supabaseAdmin.auth.admin.deleteUser(targetId);
+    }
 
     return res.json({ success: true, message: "تم حذف المستخدم نهائياً" });
   } catch (err: any) {

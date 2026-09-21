@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from "react";
+import React, { useState, useMemo, useRef, useEffect } from "react";
 import { useApp } from "../../context/AppContext";
 import {
   Settings,
@@ -273,107 +273,153 @@ export const SettingsView: React.FC = () => {
   const [editingUser, setEditingUser] = useState<AppUser | null>(null);
   const [editUserForm, setEditUserForm] = useState({ name: "", password: "" });
   const [isEditingUser, setIsEditingUser] = useState(false);
+  const [userAuditData, setUserAuditData] = useState<any[]>([]);
+  const [loadingAudit, setLoadingAudit] = useState(false);
 
-  const parseEdgeError = (error: any, data: any, fallback: string): Error => {
-    console.error("خطأ إداري في الاتصال بـ Supabase Edge Function:", { error, data });
-    if (error) {
-      const isNotDeployed = error.message?.includes("not found") || error.message?.includes("404") || error.status === 404;
-      if (isNotDeployed) {
-        return new Error("دالة الخادم الإدارية (admin-users) غير مرفوعة أو غير منشورة على مشروع Supabase الحالي. يرجى من مسؤول النظام تشغيل 'supabase functions deploy admin-users' لتفعيل هذه الميزة.");
+  const callAdminApi = async (endpoint: string, options: RequestInit = {}) => {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...(options.headers as any),
+    };
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+    return fetch(endpoint, {
+      ...options,
+      headers,
+    });
+  };
+
+  const loadUserAudit = async () => {
+    try {
+      setLoadingAudit(true);
+      const res = await callAdminApi("/api/admin/users/audit");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.audit) {
+          setUserAuditData(data.audit);
+        }
       }
-      return new Error(`خطأ في دالة الخادم (Edge Function): ${error.message || JSON.stringify(error)}`);
+    } catch (e) {
+      console.warn("Audit load error:", e);
+    } finally {
+      setLoadingAudit(false);
     }
-    if (data && data.error) {
-      return new Error(data.error);
+  };
+
+  useEffect(() => {
+    if (activeTab === "users") {
+      loadUserAudit();
     }
-    return new Error(fallback);
+  }, [activeTab]);
+
+  const handleFixOrphanUser = async (userId: string) => {
+    try {
+      const res = await callAdminApi("/api/admin/users/fix-orphan", {
+        method: "POST",
+        body: JSON.stringify({ publicUserId: userId }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "فشل ربط المستخدم");
+      }
+      showToast(data.message || "تم ربط الحساب وتأكيده بنجاح", "success");
+      await loadUserAudit();
+      const { data: refreshedUsers } = await supabase.from("users").select("*");
+      if (refreshedUsers) {
+        setUsers(
+          refreshedUsers.map((u: any) => ({
+            id: u.id,
+            name: u.name,
+            email: u.email,
+            role: u.role,
+            allowedCompanyIds: u.allowed_company_ids || u.allowedCompanyIds || [],
+            active: u.active,
+          }))
+        );
+      }
+    } catch (err: any) {
+      showToast("خطأ أثناء الربط: " + err.message, "error");
+    }
   };
 
   const handleAddUser = async () => {
-    if (!newUser.name || !newUser.email || !newUser.password) {
+    if (!newUser.name.trim() || !newUser.email.trim() || !newUser.password) {
       showToast("يرجى تعبئة جميع الحقول المطلوبة", "warning");
       return;
     }
 
     setIsAddingUser(true);
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData.session?.access_token;
-      if (!token) throw new Error("يجب تسجيل الدخول كمسؤول أولاً");
-
-      const { data, error } = await supabase.functions.invoke("admin-users", {
-        body: {
-          action: "create",
-          name: newUser.name,
-          email: newUser.email,
+      const normalizedEmail = newUser.email.trim().toLowerCase();
+      const res = await callAdminApi("/api/admin/users", {
+        method: "POST",
+        body: JSON.stringify({
+          name: newUser.name.trim(),
+          email: normalizedEmail,
           password: newUser.password,
           role: newUser.role,
           allowedCompanyIds: newUser.allowedCompanyIds,
-        },
+        }),
       });
 
-      if (error || !data?.success) {
-        throw parseEdgeError(error, data, "فشل إنشاء المستخدم");
+      const data = await res.json();
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.error || "فشل إنشاء المستخدم عبر خدمة الإدارة في الخادم");
       }
 
-      setUsers([...users, data.user]);
+      setUsers((prev) => {
+        const filtered = prev.filter((u) => u.id !== data.user.id);
+        return [...filtered, data.user];
+      });
       setNewUser({ name: "", email: "", password: "", role: "sales", allowedCompanyIds: ["all"] });
-      showToast("تم إنشاء وتفعيل حساب المستخدم إدارياً بنجاح", "success");
+      showToast("تم إنشاء وتأكيد حساب المستخدم في Supabase Auth بنجاح — يمكنه تسجيل الدخول فوراً", "success");
+      loadUserAudit();
     } catch (err: any) {
-      showToast(err.message || "حدث خطأ أثناء إضافة المستخدم", "warning");
+      showToast(err.message || "حدث خطأ أثناء إضافة المستخدم", "error");
     } finally {
       setIsAddingUser(false);
     }
   };
 
   const handleDeleteUser = async (id: string) => {
-    if (!confirm("هل أنت متأكد من حذف هذا المستخدم نهائياً؟")) return;
+    if (!confirm("هل أنت متأكد من حذف هذا المستخدم نهائياً من المصادقة وقاعدة البيانات؟")) return;
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData.session?.access_token;
-      if (!token) throw new Error("يجب تسجيل الدخول أولاً");
-
-      const { data, error } = await supabase.functions.invoke("admin-users", {
-        body: {
-          action: "delete",
-          targetId: id,
-        },
+      const res = await callAdminApi(`/api/admin/users/${id}`, {
+        method: "DELETE",
       });
-
-      if (error || !data?.success) {
-        throw parseEdgeError(error, data, "فشل الحذف");
+      const data = await res.json();
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.error || "تعذر حذف المستخدم من النظام");
       }
 
-      setUsers(users.filter((u) => u.id !== id));
-      showToast("تم حذف المستخدم وحسابه نهائياً", "success");
+      setUsers((prev) => prev.filter((u) => u.id !== id));
+      showToast("تم حذف المستخدم وحسابه نهائياً من النظام", "success");
+      loadUserAudit();
     } catch (err: any) {
-      showToast("فشل الحذف: " + err.message, "warning");
+      showToast("فشل الحذف: " + err.message, "error");
     }
   };
 
   const handleToggleUserActive = async (user: AppUser) => {
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData.session?.access_token;
-      if (!token) throw new Error("يجب تسجيل الدخول أولاً");
-
       const nextActive = !user.active;
-      const { data, error } = await supabase.functions.invoke("admin-users", {
-        body: {
-          action: "status",
-          targetId: user.id,
-          active: nextActive,
-        },
+      const res = await callAdminApi(`/api/admin/users/${user.id}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ active: nextActive }),
       });
-
-      if (error || !data?.success) {
-        throw parseEdgeError(error, data, "فشل التحديث");
+      const data = await res.json();
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.error || "تعذر تحديث حالة المستخدم");
       }
 
-      setUsers(users.map((u) => (u.id === user.id ? { ...u, active: nextActive } : u)));
-      showToast(nextActive ? "تم تفعيل المستخدم" : "تم إيقاف المستخدم وتعطيل دخوله", "success");
+      setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, active: nextActive } : u)));
+      showToast(nextActive ? "تم تفعيل المستخدم بنجاح" : "تم إيقاف حساب المستخدم وحظره من الدخول", "success");
+      loadUserAudit();
     } catch (err: any) {
-      showToast("فشل التحديث: " + err.message, "warning");
+      showToast("فشل التحديث: " + err.message, "error");
     }
   };
 
@@ -383,31 +429,24 @@ export const SettingsView: React.FC = () => {
     newCompanyId: string
   ) => {
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData.session?.access_token;
-      if (!token) throw new Error("يجب تسجيل الدخول أولاً");
-
-      const { data, error } = await supabase.functions.invoke("admin-users", {
-        body: {
-          action: "role",
-          targetId: user.id,
-          role: newRole,
-          allowedCompanyIds: [newCompanyId],
-        },
+      const res = await callAdminApi(`/api/admin/users/${user.id}/role`, {
+        method: "PATCH",
+        body: JSON.stringify({ role: newRole, allowedCompanyIds: [newCompanyId] }),
       });
-
-      if (error || !data?.success) {
-        throw parseEdgeError(error, data, "فشل التحديث");
+      const data = await res.json();
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.error || "تعذر تحديث صلاحيات المستخدم");
       }
 
-      setUsers(
-        users.map((u) =>
+      setUsers((prev) =>
+        prev.map((u) =>
           u.id === user.id ? { ...u, role: newRole, allowedCompanyIds: [newCompanyId] } : u
         )
       );
-      showToast("تم تحديث صلاحيات المستخدم", "success");
+      showToast("تم تحديث صلاحيات المستخدم والشركة بنجاح", "success");
+      loadUserAudit();
     } catch (err: any) {
-      showToast("فشل التحديث: " + err.message, "warning");
+      showToast("فشل التحديث: " + err.message, "error");
     }
   };
 
@@ -417,32 +456,26 @@ export const SettingsView: React.FC = () => {
 
     try {
       setIsEditingUser(true);
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData.session?.access_token;
-      if (!token) throw new Error("يجب تسجيل الدخول أولاً");
-
-      const bodyData: any = {
-        action: "update",
-        targetId: editingUser.id,
-        name: editUserForm.name,
-      };
-      if (editUserForm.password.trim()) {
-        bodyData.password = editUserForm.password;
-      }
-
-      const { data, error } = await supabase.functions.invoke("admin-users", {
-        body: bodyData,
+      const res = await callAdminApi(`/api/admin/users/${editingUser.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: editUserForm.name.trim(),
+          password: editUserForm.password.trim() || undefined,
+        }),
       });
-
-      if (error || !data?.success) {
-        throw parseEdgeError(error, data, "فشل التحديث");
+      const data = await res.json();
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.error || "تعذر تحديث بيانات المستخدم");
       }
 
-      setUsers(users.map((u) => (u.id === editingUser.id ? { ...u, name: editUserForm.name } : u)));
+      setUsers((prev) =>
+        prev.map((u) => (u.id === editingUser.id ? { ...u, name: editUserForm.name.trim() } : u))
+      );
       setEditingUser(null);
       showToast("تم تحديث بيانات المستخدم وكلمة المرور بنجاح", "success");
+      loadUserAudit();
     } catch (err: any) {
-      showToast(err.message, "warning");
+      showToast(err.message, "error");
     } finally {
       setIsEditingUser(false);
     }
@@ -780,51 +813,86 @@ export const SettingsView: React.FC = () => {
                     <th className="pb-2.5 font-semibold">البريد</th>
                     <th className="pb-2.5 font-semibold">الدور</th>
                     <th className="pb-2.5 font-semibold">الشركة المحددة</th>
-                    <th className="pb-2.5 font-semibold">الحالة</th>
+                    <th className="pb-2.5 font-semibold">حالة الحساب</th>
+                    <th className="pb-2.5 font-semibold">هوية Supabase Auth</th>
                     <th className="pb-2.5 font-semibold text-center">الإجراءات</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#292B2E]">
-                  {users.map((u) => (
-                    <tr key={u.id} className="hover:bg-[#202225]/40 transition-colors">
-                      <td className="py-3 font-bold">{u.name}</td>
-                      <td className="py-3 text-[#A1A1AA] font-mono text-[11px]">{u.email}</td>
-                      <td className="py-3">
-                        <span
-                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            u.role === "owner"
-                              ? "bg-amber-950/70 text-amber-400 border border-amber-800/40"
+                  {users.map((u) => {
+                    const auditEntry = userAuditData.find(
+                      (a) => a.publicId === u.id || a.email?.toLowerCase() === u.email?.toLowerCase()
+                    );
+                    return (
+                      <tr key={u.id} className="hover:bg-[#202225]/40 transition-colors">
+                        <td className="py-3 font-bold">{u.name}</td>
+                        <td className="py-3 text-[#A1A1AA] font-mono text-[11px]">{u.email}</td>
+                        <td className="py-3">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              u.role === "owner"
+                                ? "bg-amber-950/70 text-amber-400 border border-amber-800/40"
+                                : u.role === "admin"
+                                ? "bg-blue-950/70 text-blue-400 border border-blue-800/40"
+                                : "bg-slate-800 text-slate-300"
+                            }`}
+                          >
+                            {u.role === "owner"
+                              ? "مالك النظام"
                               : u.role === "admin"
-                              ? "bg-blue-950/70 text-blue-400 border border-blue-800/40"
-                              : "bg-slate-800 text-slate-300"
-                          }`}
-                        >
-                          {u.role === "owner"
-                            ? "مالك النظام"
-                            : u.role === "admin"
-                            ? "مدير شركة"
-                            : "موظف مبيعات"}
-                        </span>
-                      </td>
-                      <td className="py-3 text-[#A1A1AA]">
-                        {u.allowedCompanyIds[0] === "all"
-                          ? "كافة الشركات"
-                          : companies.find((c) => c.id === u.allowedCompanyIds[0])?.name ||
-                            u.allowedCompanyIds[0]}
-                      </td>
-                      <td className="py-3">
-                        <span
-                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            u.active !== false
-                              ? "bg-emerald-950/70 text-emerald-400 border border-emerald-800/40"
-                              : "bg-rose-950/70 text-rose-400 border border-rose-800/40"
-                          }`}
-                        >
-                          {u.active !== false ? "نشط" : "موقوف"}
-                        </span>
-                      </td>
-                      <td className="py-3">
-                        <div className="flex items-center justify-center gap-1.5">
+                              ? "مدير شركة"
+                              : "موظف مبيعات"}
+                          </span>
+                        </td>
+                        <td className="py-3 text-[#A1A1AA]">
+                          {u.allowedCompanyIds[0] === "all"
+                            ? "كافة الشركات"
+                            : companies.find((c) => c.id === u.allowedCompanyIds[0])?.name ||
+                              u.allowedCompanyIds[0]}
+                        </td>
+                        <td className="py-3">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              u.active !== false
+                                ? "bg-emerald-950/70 text-emerald-400 border border-emerald-800/40"
+                                : "bg-rose-950/70 text-rose-400 border border-rose-800/40"
+                            }`}
+                          >
+                            {u.active !== false ? "نشط" : "موقوف"}
+                          </span>
+                        </td>
+                        <td className="py-3">
+                          {auditEntry?.status === "MATCHED" ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950/70 text-emerald-400 border border-emerald-800/40">
+                              ✓ مؤكد في Auth
+                            </span>
+                          ) : auditEntry?.status === "ORPHANED_PROFILE" || !auditEntry ? (
+                            <button
+                              onClick={() => handleFixOrphanUser(u.id)}
+                              className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-950/80 text-amber-300 border border-amber-800/60 hover:bg-amber-900 transition-colors shadow-sm"
+                              title="المستخدم مسجل في جدول public.users فقط بدون هوية في Supabase Auth. انقر للربط والتأكيد فوراً."
+                            >
+                              ⚠️ ربط وتأكيد Auth
+                            </button>
+                          ) : auditEntry?.status === "UNCONFIRMED_AUTH" ? (
+                            <button
+                              onClick={() => handleFixOrphanUser(u.id)}
+                              className="px-2 py-0.5 rounded text-[10px] font-bold bg-yellow-950/80 text-yellow-300 border border-yellow-800/60 hover:bg-yellow-900 transition-colors"
+                              title="البريد بانتظار التأكيد. انقر لتأكيده فورا."
+                            >
+                              تأكيد الحساب فورا
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleFixOrphanUser(u.id)}
+                              className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-950/80 text-rose-300 border border-rose-800/60 hover:bg-rose-900"
+                            >
+                              مزامنة المعرف
+                            </button>
+                          )}
+                        </td>
+                        <td className="py-3">
+                          <div className="flex items-center justify-center gap-1.5">
                           {u.role !== "owner" ? (
                             <>
                               <button
@@ -859,7 +927,8 @@ export const SettingsView: React.FC = () => {
                         </div>
                       </td>
                     </tr>
-                  ))}
+                  );
+                })}
                 </tbody>
               </table>
             </div>

@@ -52,6 +52,11 @@ export const RecordSalaryPaymentModal: React.FC<RecordSalaryPaymentModalProps> =
       return;
     }
 
+    if (remainingSalary > 0 && payAmount > remainingSalary) {
+      showToast(`لا يمكن صرف مبلغ (${payAmount.toLocaleString()} ج.م) يتجاوز الراتب المتبقي المستحق (${remainingSalary.toLocaleString()} ج.م). لمنع الرصيد السالب.`, "warning");
+      return;
+    }
+
     recordSalaryPayment({
       employeeId: targetEmployee.id,
       companyId: targetEmployee.companyId,

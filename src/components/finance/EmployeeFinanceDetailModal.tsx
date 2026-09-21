@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { useApp } from "../../context/AppContext";
-import { Employee, Contract, MonthlyStatement } from "../../types";
+import { Employee, Contract, MonthlyStatement, CommissionAdjustment } from "../../types";
 import {
   X,
   User,
@@ -23,10 +23,20 @@ import {
   RefreshCcw,
   Settings,
   Info,
+  ShieldCheck,
+  CheckCheck,
+  FileSpreadsheet,
+  ExternalLink,
+  Trash2,
 } from "lucide-react";
 import { EditStatementModal } from "./EditStatementModal";
 import { RecordSalaryPaymentModal } from "./RecordSalaryPaymentModal";
 import { RecordCommissionPaymentModal } from "./RecordCommissionPaymentModal";
+import {
+  EditPaymentModal,
+  EditAdjustmentModal,
+  AddPeriodAdjustmentModal,
+} from "./FinancePaymentModals";
 
 interface EmployeeFinanceDetailModalProps {
   isOpen: boolean;
@@ -49,13 +59,18 @@ export const EmployeeFinanceDetailModal: React.FC<EmployeeFinanceDetailModalProp
     updateEmployeeSalary,
     deleteSalaryPayment,
     deleteCommissionPayment,
+    updateSalaryPayment,
+    updateCommissionPayment,
     addCommissionAdjustment,
+    updateCommissionAdjustment,
     deleteCommissionAdjustment,
+    reviewStatement,
     approveStatement,
     recalculateStatement,
     showToast,
     employeeStatements,
     auditLogs,
+    setSelectedCustomerIdFor360,
   } = useApp();
 
   const statements = useMemo(() => employeeStatements[employee.id] || [], [employeeStatements, employee.id]);
@@ -115,6 +130,15 @@ export const EmployeeFinanceDetailModal: React.FC<EmployeeFinanceDetailModalProp
   const [isEditStatementModalOpen, setIsEditStatementModalOpen] = useState(false);
   const [selectedStatement, setSelectedStatement] = useState<MonthlyStatement | null>(null);
   const [expandedStatement, setExpandedStatement] = useState<string | null>(null);
+
+  // Sub-tabs inside expanded statements
+  const [statementSubTabs, setStatementSubTabs] = useState<{ [stmtId: string]: "contracts" | "deductions" | "bonuses" | "payments" | "audit" }>({});
+
+  // Editing state for payments and adjustments
+  const [editingPayment, setEditingPayment] = useState<{ type: "salary" | "commission"; payment: any } | null>(null);
+  const [editingAdjustment, setEditingAdjustment] = useState<CommissionAdjustment | null>(null);
+  const [periodAdjustmentModal, setPeriodAdjustmentModal] = useState<{ isOpen: boolean; period: string; type: "deduction" | "bonus" } | null>(null);
+  const [paymentPeriodPreset, setPaymentPeriodPreset] = useState<string | null>(null);
 
   // New salary adjustment form state
   const [isAddingSalaryAdj, setIsAddingSalaryAdj] = useState(false);
@@ -487,203 +511,798 @@ export const EmployeeFinanceDetailModal: React.FC<EmployeeFinanceDetailModalProp
                     <p className="text-xs text-[#71717A]">لا توجد كشوف مالية مسجلة حالياً.</p>
                   </div>
                 ) : (
-                  statements.map((stmt) => (
-                    <div key={stmt.id} className={`bg-[#202225] border rounded-2xl overflow-hidden transition-all ${expandedStatement === stmt.id ? 'border-[#C8A75A]/60 ring-1 ring-[#C8A75A]/20' : 'border-[#292B2E] hover:border-[#35383C]'}`}>
-                      <div className="p-4">
-                        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-[#292B2E] pb-3 mb-3">
-                          <div className="flex items-center gap-3">
-                            <button 
-                              onClick={() => setExpandedStatement(expandedStatement === stmt.id ? null : stmt.id)}
-                              className="w-10 h-10 rounded-xl bg-[#292B2E] hover:bg-[#35383C] flex flex-col items-center justify-center text-[#A1A1AA] hover:text-[#EDEDED] transition-colors cursor-pointer group"
-                            >
-                              <span className="text-[10px] font-bold text-[#C8A75A] group-hover:scale-110 transition-transform">Audit</span>
-                              {expandedStatement === stmt.id ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                            </button>
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm font-black text-[#EDEDED]">{stmt.period}</span>
-                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
-                                  stmt.status === 'approved' ? 'bg-emerald-950/60 text-emerald-400 border-emerald-800/40' :
-                                  stmt.status === 'reviewed' ? 'bg-sky-950/60 text-sky-400 border-sky-800/40' :
-                                  'bg-[#292B2E] text-[#A1A1AA] border-[#35383C]'
-                                }`}>
-                                  {stmt.status === 'approved' ? 'معتمد' : stmt.status === 'reviewed' ? 'تمت المراجعة' : stmt.status === 'paid' ? 'تم الصرف' : 'مسودة (Calculated)'}
-                                </span>
+                  statements.map((stmt) => {
+                    const stmtDeductions = (employee.commissionAdjustments || []).filter(
+                      (a) => a.period === stmt.period && (a.amount < 0 || a.type === "deduction")
+                    );
+                    const stmtBonuses = (employee.commissionAdjustments || []).filter(
+                      (a) => a.period === stmt.period && (a.amount > 0 || a.type === "bonus" || a.type === "adjustment")
+                    );
+                    const stmtSalPays = salaryPayments.filter(
+                      (p) => p.employeeId === employee.id && p.period === stmt.period && p.recordStatus !== "duplicate" && p.recordStatus !== "excluded"
+                    );
+                    const stmtCommPays = commissionPayments.filter(
+                      (p) => p.employeeId === employee.id && p.period === stmt.period && p.recordStatus !== "duplicate" && p.recordStatus !== "excluded"
+                    );
+                    const stmtAllPays = [
+                      ...stmtSalPays.map((p) => ({ ...p, paymentType: "salary" as const })),
+                      ...stmtCommPays.map((p) => ({ ...p, paymentType: "commission" as const })),
+                    ].sort((a, b) => (b.paymentDate || "").localeCompare(a.paymentDate || ""));
+
+                    const activeSubTab = statementSubTabs[stmt.id] || "contracts";
+
+                    const toggleSubTab = (tab: "contracts" | "deductions" | "bonuses" | "payments" | "audit") => {
+                      setStatementSubTabs((prev) => ({ ...prev, [stmt.id]: tab }));
+                      if (expandedStatement !== stmt.id) {
+                        setExpandedStatement(stmt.id);
+                      }
+                    };
+
+                    return (
+                      <div
+                        key={stmt.id}
+                        className={`bg-[#202225] border rounded-2xl overflow-hidden transition-all ${
+                          expandedStatement === stmt.id
+                            ? "border-[#C8A75A]/60 ring-1 ring-[#C8A75A]/20"
+                            : "border-[#292B2E] hover:border-[#35383C]"
+                        }`}
+                      >
+                        <div className="p-4">
+                          {/* Header Bar */}
+                          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 border-b border-[#292B2E] pb-3 mb-3">
+                            <div className="flex items-center gap-3">
+                              <button
+                                onClick={() => setExpandedStatement(expandedStatement === stmt.id ? null : stmt.id)}
+                                className="w-10 h-10 rounded-xl bg-[#292B2E] hover:bg-[#35383C] flex flex-col items-center justify-center text-[#A1A1AA] hover:text-[#EDEDED] transition-colors cursor-pointer group"
+                                title="عرض التفاصيل والتدقيق"
+                              >
+                                <span className="text-[10px] font-bold text-[#C8A75A] group-hover:scale-110 transition-transform">Audit</span>
+                                {expandedStatement === stmt.id ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                              </button>
+                              <div>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-sm font-black text-[#EDEDED] font-mono">{stmt.period}</span>
+                                  <span
+                                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border flex items-center gap-1 ${
+                                      stmt.status === "approved"
+                                        ? "bg-emerald-950/60 text-emerald-400 border-emerald-800/40"
+                                        : stmt.status === "reviewed"
+                                        ? "bg-sky-950/60 text-sky-400 border-sky-800/40"
+                                        : stmt.status === "paid"
+                                        ? "bg-emerald-950/40 text-emerald-300 border-emerald-700/30"
+                                        : stmt.status === "partially_paid"
+                                        ? "bg-amber-950/40 text-amber-300 border-amber-700/30"
+                                        : "bg-[#292B2E] text-[#A1A1AA] border-[#35383C]"
+                                    }`}
+                                  >
+                                    {stmt.status === "approved" && <ShieldCheck className="w-3 h-3" />}
+                                    {stmt.status === "reviewed" && <CheckCheck className="w-3 h-3" />}
+                                    {stmt.status === "approved"
+                                      ? "معتمد رسمياً (Approved)"
+                                      : stmt.status === "reviewed"
+                                      ? "تمت المراجعة (Reviewed)"
+                                      : stmt.status === "paid"
+                                      ? "مسدد بالكامل (Paid)"
+                                      : stmt.status === "partially_paid"
+                                      ? "مسدد جزئياً"
+                                      : "مسودة محسوبة (Calculated)"}
+                                  </span>
+                                </div>
+                                <p className="text-[10px] text-[#71717A] mt-0.5 font-mono">
+                                  الاستحقاق الصافي: <span className="text-[#EDEDED] font-bold">{stmt.totalDue.toLocaleString()} ج.م</span> | المتبقي للصرف: <span className="text-amber-400 font-bold">{stmt.remaining.toLocaleString()} ج.م</span>
+                                </p>
                               </div>
-                              <p className="text-[10px] text-[#71717A] mt-0.5 font-mono">
-                                الاستحقاق: {stmt.totalDue.toLocaleString()} ج.م | المتبقي: {stmt.remaining.toLocaleString()} ج.م
+                            </div>
+
+                            {/* Action Buttons Toolbar */}
+                            <div className="flex items-center gap-1.5 flex-wrap w-full lg:w-auto">
+                              {/* Recalculate */}
+                              <button
+                                onClick={() => recalculateStatement(employee.id, stmt.period)}
+                                className="px-2.5 py-1.5 rounded-xl bg-[#292B2E] text-[#A1A1AA] hover:text-rose-400 hover:bg-[#35383C] transition-colors cursor-pointer flex items-center gap-1 text-[10px] font-bold border border-[#35383C]"
+                                title="إعادة حساب الكشف من العقود والرواتب والتسويات المسجلة"
+                              >
+                                <RefreshCcw className="w-3 h-3" />
+                                <span>إعادة حساب</span>
+                              </button>
+
+                              {/* Review Workflow Button */}
+                              {stmt.status !== "approved" && stmt.status !== "reviewed" && (
+                                <button
+                                  onClick={() => reviewStatement(employee.id, stmt.period)}
+                                  className="px-2.5 py-1.5 rounded-xl bg-sky-950/40 text-sky-400 hover:bg-sky-900/40 border border-sky-800/40 transition-colors cursor-pointer flex items-center gap-1 text-[10px] font-bold"
+                                  title="تغيير حالة الكشف إلى تمت المراجعة"
+                                >
+                                  <CheckCheck className="w-3 h-3" />
+                                  <span>مراجعة</span>
+                                </button>
+                              )}
+
+                              {/* Approve Workflow Button */}
+                              {stmt.status !== "approved" && (
+                                <button
+                                  onClick={() => approveStatement(employee.id, stmt.period)}
+                                  className="px-2.5 py-1.5 rounded-xl bg-emerald-950/40 text-emerald-400 hover:bg-emerald-900/40 border border-emerald-800/40 transition-colors cursor-pointer flex items-center gap-1 text-[10px] font-bold"
+                                  title="اعتماد الكشف رسمياً ومنع التعديل الصامت عليه"
+                                >
+                                  <ShieldCheck className="w-3 h-3" />
+                                  <span>اعتماد الكشف</span>
+                                </button>
+                              )}
+
+                              {/* Pay Salary quick action */}
+                              <button
+                                onClick={() => {
+                                  setPaymentPeriodPreset(stmt.period);
+                                  setIsSalaryModalOpen(true);
+                                }}
+                                className="px-2.5 py-1.5 rounded-xl bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 border border-emerald-600/30 transition-colors cursor-pointer flex items-center gap-1 text-[10px] font-bold"
+                                title="صرف راتب لهذا الشهر"
+                              >
+                                <Banknote className="w-3 h-3" />
+                                <span>صرف راتب</span>
+                              </button>
+
+                              {/* Pay Commission quick action */}
+                              <button
+                                onClick={() => {
+                                  setPaymentPeriodPreset(stmt.period);
+                                  setTargetContractForCommission(null);
+                                  setIsCommissionModalOpen(true);
+                                }}
+                                className="px-2.5 py-1.5 rounded-xl bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 border border-amber-600/30 transition-colors cursor-pointer flex items-center gap-1 text-[10px] font-bold"
+                                title="صرف عمولة لهذا الشهر"
+                              >
+                                <Percent className="w-3 h-3" />
+                                <span>صرف عمولة</span>
+                              </button>
+
+                              {/* Edit Statement Override / Adjust */}
+                              <button
+                                onClick={() => {
+                                  setSelectedStatement(stmt);
+                                  setIsEditStatementModalOpen(true);
+                                }}
+                                className="px-2.5 py-1.5 rounded-xl bg-[#C8A75A]/10 text-[#C8A75A] hover:bg-[#C8A75A]/20 transition-colors cursor-pointer flex items-center gap-1 text-[10px] font-bold border border-[#C8A75A]/20"
+                                title="تعديل الراتب أو تسجيل تسوية/خصم إداري"
+                              >
+                                <Edit className="w-3 h-3" />
+                                <span>تعديل</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* 8 Standard KPI Cards with Interactive Drilldown Triggers */}
+                          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+                            {/* 1. Basic Salary */}
+                            <div className="p-2.5 bg-[#18191B] rounded-xl border border-[#292B2E] flex flex-col justify-between">
+                              <p className="text-[9px] text-[#71717A] mb-1 font-semibold">الراتب الأساسي</p>
+                              <p className="text-xs text-[#EDEDED] font-black font-mono">{stmt.salaryDue.toLocaleString()} ج.م</p>
+                            </div>
+
+                            {/* 2. Eligible Sales */}
+                            <button
+                              onClick={() => toggleSubTab("contracts")}
+                              className="p-2.5 bg-[#18191B] hover:bg-[#25282B] rounded-xl border border-[#292B2E] hover:border-sky-500/40 text-right transition-colors cursor-pointer flex flex-col justify-between group"
+                              title="اضغط لعرض عقود المبيعات المنسوبة"
+                            >
+                              <div className="flex items-center justify-between">
+                                <p className="text-[9px] text-[#71717A] group-hover:text-sky-400 transition-colors font-semibold">
+                                  مبيعات مؤهلة ({stmt.eligibleContractsCount})
+                                </p>
+                                <ExternalLink className="w-2.5 h-2.5 text-[#71717A] group-hover:text-sky-400" />
+                              </div>
+                              <p className="text-xs text-sky-400 font-black font-mono">{stmt.eligibleContractsTotal.toLocaleString()} ج.م</p>
+                            </button>
+
+                            {/* 3. Commission Rate & Earned */}
+                            <button
+                              onClick={() => toggleSubTab("contracts")}
+                              className="p-2.5 bg-[#18191B] hover:bg-[#25282B] rounded-xl border border-[#292B2E] hover:border-[#C8A75A]/40 text-right transition-colors cursor-pointer flex flex-col justify-between group"
+                              title="نسبة العمولة وقيمتها المحتسبة"
+                            >
+                              <div className="flex items-center justify-between">
+                                <p className="text-[9px] text-[#71717A] group-hover:text-[#C8A75A] transition-colors font-semibold">
+                                  العمولة ({stmt.commissionRateUsed}%)
+                                </p>
+                                <ExternalLink className="w-2.5 h-2.5 text-[#71717A] group-hover:text-[#C8A75A]" />
+                              </div>
+                              <p className="text-xs text-[#C8A75A] font-black font-mono">{stmt.commissionEarned.toLocaleString()} ج.م</p>
+                            </button>
+
+                            {/* 4. Deductions */}
+                            <button
+                              onClick={() => toggleSubTab("deductions")}
+                              className="p-2.5 bg-[#18191B] hover:bg-[#25282B] rounded-xl border border-[#292B2E] hover:border-rose-500/40 text-right transition-colors cursor-pointer flex flex-col justify-between group"
+                              title="اضغط لعرض الخصومات أو إضافة خصم جديد"
+                            >
+                              <div className="flex items-center justify-between">
+                                <p className="text-[9px] text-[#71717A] group-hover:text-rose-400 transition-colors font-semibold">
+                                  الخصومات ({stmtDeductions.length})
+                                </p>
+                                <ExternalLink className="w-2.5 h-2.5 text-[#71717A] group-hover:text-rose-400" />
+                              </div>
+                              <p className={`text-xs font-black font-mono ${stmt.deductions > 0 ? "text-rose-400" : "text-[#71717A]"}`}>
+                                {stmt.deductions > 0 ? `-${stmt.deductions.toLocaleString()}` : "0"} ج.م
                               </p>
-                            </div>
-                          </div>
-                          
-                          <div className="flex items-center gap-2 w-full sm:w-auto">
-                            <button 
-                              onClick={() => recalculateStatement(employee.id, stmt.period)}
-                              className="px-3 py-1.5 rounded-lg bg-[#292B2E] text-[#A1A1AA] hover:text-rose-400 transition-colors cursor-pointer flex items-center gap-1.5 text-[10px] font-bold border border-[#35383C]"
-                            >
-                              <RefreshCcw className="w-3.5 h-3.5" />
-                              <span>إعادة حساب</span>
                             </button>
-                            
-                            <button 
-                              onClick={() => {
-                                setSelectedStatement(stmt);
-                                setIsEditStatementModalOpen(true);
-                              }}
-                              className="px-3 py-1.5 rounded-lg bg-[#C8A75A]/10 text-[#C8A75A] hover:bg-[#C8A75A]/20 transition-colors cursor-pointer flex items-center gap-1.5 text-[10px] font-bold border border-[#C8A75A]/20"
+
+                            {/* 5. Bonuses & Adjustments */}
+                            <button
+                              onClick={() => toggleSubTab("bonuses")}
+                              className="p-2.5 bg-[#18191B] hover:bg-[#25282B] rounded-xl border border-[#292B2E] hover:border-emerald-500/40 text-right transition-colors cursor-pointer flex flex-col justify-between group"
+                              title="اضغط لعرض المكافآت والتسويات"
                             >
-                              <Edit className="w-3.5 h-3.5" />
-                              <span>تعديل</span>
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-2 sm:grid-cols-6 gap-3">
-                          <div className="p-2 bg-[#18191B] rounded-xl border border-[#292B2E]">
-                            <p className="text-[9px] text-[#71717A] mb-1">الراتب الأساسي</p>
-                            <p className="text-xs text-[#EDEDED] font-black font-mono">{stmt.salaryDue.toLocaleString()} ج.م</p>
-                          </div>
-                          <div className="p-2 bg-[#18191B] rounded-xl border border-[#292B2E]">
-                            <p className="text-[9px] text-[#71717A] mb-1">عقود مؤهلة ({stmt.eligibleContractsCount})</p>
-                            <p className="text-xs text-[#EDEDED] font-black font-mono">{stmt.eligibleContractsTotal.toLocaleString()} ج.م</p>
-                          </div>
-                          <div className="p-2 bg-[#18191B] rounded-xl border border-[#292B2E]">
-                            <p className="text-[9px] text-[#71717A] mb-1">التحصيل المؤهل</p>
-                            <p className="text-xs text-sky-400 font-black font-mono">{(stmt.eligibleCollectionTotal || 0).toLocaleString()} ج.م</p>
-                          </div>
-                          <div className="p-2 bg-[#18191B] rounded-xl border border-[#292B2E]">
-                            <p className="text-[9px] text-[#71717A] mb-1">نسبة العمولة</p>
-                            <p className="text-xs text-[#C8A75A] font-black font-mono">{stmt.commissionRateUsed}%</p>
-                          </div>
-                          <div className="p-2 bg-[#18191B] rounded-xl border border-[#292B2E]">
-                            <p className="text-[9px] text-[#71717A] mb-1">عمولة الشهر</p>
-                            <p className="text-xs text-[#C8A75A] font-black font-mono">{stmt.commissionEarned.toLocaleString()} ج.م</p>
-                          </div>
-                          <div className="p-2 bg-[#18191B] rounded-xl border border-[#C8A75A]/30">
-                            <p className="text-[9px] text-[#C8A75A] mb-1">صافي المستحق</p>
-                            <p className="text-xs text-[#EDEDED] font-black font-mono">{stmt.totalDue.toLocaleString()} ج.م</p>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Summary Bar: Paid vs Remaining */}
-                      <div className="px-4 py-2 bg-[#18191B]/50 flex items-center justify-between text-[10px] border-t border-[#292B2E]">
-                        <div className="flex items-center gap-4">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-[#71717A]">المدفوع:</span>
-                            <span className="text-emerald-400 font-bold font-mono">{stmt.totalPaid.toLocaleString()} ج.م</span>
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-[#71717A]">المتبقي:</span>
-                            <span className="text-rose-400 font-bold font-mono">{stmt.remaining.toLocaleString()} ج.م</span>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                           <span className={`w-2 h-2 rounded-full ${stmt.remaining <= 0 ? 'bg-emerald-500' : stmt.totalPaid > 0 ? 'bg-amber-500' : 'bg-gray-600'}`}></span>
-                           <span className="text-[#A1A1AA]">{stmt.remaining <= 0 ? 'مدفوع بالكامل' : stmt.totalPaid > 0 ? 'مدفوع جزئياً' : 'بانتظار الصرف'}</span>
-                        </div>
-                      </div>
-
-                      {/* Expanded View: Contract Audit */}
-                      {expandedStatement === stmt.id && (
-                        <div className="bg-[#1E2023] border-t border-[#292B2E] p-4 animate-in slide-in-from-top-2 duration-200">
-                          <div className="flex items-center justify-between mb-4">
-                            <h5 className="text-[11px] font-black text-[#EDEDED] flex items-center gap-2">
-                              <FileText className="w-4 h-4 text-[#C8A75A]" />
-                              عرض العقود المكوِّنة للعمولة - {stmt.period}
-                            </h5>
-                          </div>
-
-                          <div className="overflow-x-auto rounded-xl border border-[#292B2E] mb-4">
-                            <table className="w-full text-right text-[10px]">
-                              <thead className="bg-[#18191B] text-[#71717A] border-b border-[#292B2E]">
-                                <tr>
-                                  <th className="p-2 font-bold">العقد</th>
-                                  <th className="p-2 font-bold">العميل</th>
-                                  <th className="p-2 font-bold">التاريخ</th>
-                                  <th className="p-2 font-bold">قيمة العقد</th>
-                                  <th className="p-2 font-bold">مؤهل للعمولة؟</th>
-                                  <th className="p-2 font-bold text-left">الحالة</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-[#292B2E]">
-                                {stmt.contractDetails.map(detail => (
-                                  <tr key={detail.contractId} className="hover:bg-[#202225] transition-colors">
-                                    <td className="p-2 font-mono font-bold text-[#EDEDED]">{detail.contractNumber}</td>
-                                    <td className="p-2 font-bold text-[#EDEDED]">{detail.customerName}</td>
-                                    <td className="p-2 text-[#A1A1AA]">{detail.date}</td>
-                                    <td className="p-2 font-mono text-[#EDEDED]">{detail.totalValue.toLocaleString()} ج.م</td>
-                                    <td className="p-2">
-                                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
-                                        detail.isEligible ? 'bg-emerald-950/40 text-emerald-400' : 'bg-rose-950/40 text-rose-400'
-                                      }`}>
-                                        {detail.isEligible ? 'نعم' : 'لا'}
-                                      </span>
-                                    </td>
-                                    <td className="p-2 text-left text-[#71717A]">{detail.triggerStatus}</td>
-                                  </tr>
-                                ))}
-                                {stmt.contractDetails.length === 0 && (
-                                  <tr>
-                                    <td colSpan={6} className="p-6 text-center italic text-[#71717A]">
-                                      لا توجد عقود مسجلة لهذا الشهر.
-                                    </td>
-                                  </tr>
-                                )}
-                              </tbody>
-                            </table>
-                          </div>
-
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-[#18191B] p-4 rounded-xl border border-[#292B2E]">
-                            <div>
-                              <p className="text-[9px] text-[#71717A] mb-1">إجمالي قيمة العقود</p>
-                              <p className="text-sm font-black text-[#EDEDED] font-mono">{stmt.eligibleContractsTotal.toLocaleString()} جنيه</p>
-                            </div>
-                            <div>
-                              <p className="text-[9px] text-[#71717A] mb-1">نسبة العمولة</p>
-                              <p className="text-sm font-black text-[#C8A75A] font-mono">{stmt.commissionRateUsed}%</p>
-                            </div>
-                            <div className="text-left sm:text-right">
-                              <p className="text-[9px] text-[#C8A75A] mb-1">عمولة الشهر</p>
-                              <p className="text-sm font-black text-emerald-400 font-mono">{stmt.commissionEarned.toLocaleString()} جنيه</p>
-                            </div>
-                          </div>
-                          
-                          <p className="mt-4 text-[9px] text-[#71717A] italic text-center">
-                            العقود هنا مصدر شفافية ومراجعة، وليست سجلات عمولة مستقلة يتم جمعها كدفعات منفصلة.
-                          </p>
-
-                          {/* Audit History for Manual Overrides */}
-                          {stmt.history && stmt.history.length > 0 && (
-                            <div className="mt-6 pt-4 border-t border-[#292B2E] space-y-3">
-                              <div className="flex items-center gap-2 text-[#EDEDED] text-[10px] font-bold">
-                                <History className="w-3.5 h-3.5 text-amber-500" />
-                                <span>سجل التعديلات اليدوية (Audit Trail)</span>
+                              <div className="flex items-center justify-between">
+                                <p className="text-[9px] text-[#71717A] group-hover:text-emerald-400 transition-colors font-semibold">
+                                  مكافآت/تسويات ({stmtBonuses.length})
+                                </p>
+                                <ExternalLink className="w-2.5 h-2.5 text-[#71717A] group-hover:text-emerald-400" />
                               </div>
-                              <div className="space-y-2">
-                                {stmt.history.map((h, idx) => (
-                                  <div key={idx} className="p-3 bg-[#18191B] rounded-xl border border-[#292B2E] flex flex-col gap-1">
-                                    <div className="flex items-center justify-between">
-                                      <span className="text-[9px] font-bold text-amber-400">
-                                        تعديل {h.field === 'salaryDue' ? 'الراتب' : 'العمولة'}
-                                      </span>
-                                      <span className="text-[8px] text-[#71717A] font-mono">{new Date(h.date).toLocaleString('ar-EG')}</span>
-                                    </div>
-                                    <p className="text-[10px] text-[#EDEDED]">
-                                      تم التغيير من <span className="font-mono text-[#A1A1AA] font-bold">{h.oldValue.toLocaleString()}</span> إلى <span className="font-mono text-emerald-400 font-bold">{h.newValue.toLocaleString()}</span> ج.م
-                                    </p>
-                                    <p className="text-[9px] text-[#A1A1AA]">
-                                      <span className="font-bold text-[#EDEDED]">السبب:</span> {h.reason || 'تعديل يدوي'} | <span className="font-bold text-[#EDEDED]">بواسطة:</span> {h.user}
-                                    </p>
+                              <p className={`text-xs font-black font-mono ${stmt.bonuses > 0 ? "text-emerald-400" : "text-[#71717A]"}`}>
+                                {stmt.bonuses > 0 ? `+${stmt.bonuses.toLocaleString()}` : "0"} ج.م
+                              </p>
+                            </button>
+
+                            {/* 6. Net Entitlement */}
+                            <button
+                              onClick={() => toggleSubTab("audit")}
+                              className="p-2.5 bg-[#18191B] hover:bg-[#25282B] rounded-xl border border-[#C8A75A]/30 hover:border-[#C8A75A] text-right transition-colors cursor-pointer flex flex-col justify-between group"
+                              title="صافي المستحق = الراتب + العمولة + المكافآت - الخصومات"
+                            >
+                              <div className="flex items-center justify-between">
+                                <p className="text-[9px] text-[#C8A75A] font-bold">صافي المستحق</p>
+                                <ExternalLink className="w-2.5 h-2.5 text-[#C8A75A]" />
+                              </div>
+                              <p className="text-xs text-[#EDEDED] font-black font-mono">{stmt.totalDue.toLocaleString()} ج.م</p>
+                            </button>
+
+                            {/* 7. Total Paid */}
+                            <button
+                              onClick={() => toggleSubTab("payments")}
+                              className="p-2.5 bg-[#18191B] hover:bg-[#25282B] rounded-xl border border-[#292B2E] hover:border-emerald-500/40 text-right transition-colors cursor-pointer flex flex-col justify-between group"
+                              title="اضغط لعرض سندات الصرف والتحصيلات"
+                            >
+                              <div className="flex items-center justify-between">
+                                <p className="text-[9px] text-[#71717A] group-hover:text-emerald-400 transition-colors font-semibold">
+                                  المدفوع ({stmtAllPays.length})
+                                </p>
+                                <ExternalLink className="w-2.5 h-2.5 text-[#71717A] group-hover:text-emerald-400" />
+                              </div>
+                              <p className="text-xs text-emerald-400 font-black font-mono">{stmt.totalPaid.toLocaleString()} ج.م</p>
+                            </button>
+
+                            {/* 8. Remaining Balance */}
+                            <button
+                              onClick={() => toggleSubTab("audit")}
+                              className="p-2.5 bg-[#18191B] hover:bg-[#25282B] rounded-xl border border-[#292B2E] hover:border-amber-500/40 text-right transition-colors cursor-pointer flex flex-col justify-between group"
+                              title="المتبقي المستحق = صافي المستحق - إجمالي المدفوع"
+                            >
+                              <div className="flex items-center justify-between">
+                                <p className="text-[9px] text-[#71717A] group-hover:text-amber-400 transition-colors font-semibold">
+                                  المتبقي المستحق
+                                </p>
+                                <ExternalLink className="w-2.5 h-2.5 text-[#71717A] group-hover:text-amber-400" />
+                              </div>
+                              <p className={`text-xs font-black font-mono ${stmt.remaining > 0 ? "text-amber-400" : "text-emerald-400"}`}>
+                                {stmt.remaining.toLocaleString()} ج.م
+                              </p>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Summary Bar: Paid Breakdown & Status Indicators */}
+                        <div className="px-4 py-2 bg-[#18191B]/60 flex flex-wrap items-center justify-between text-[10px] border-t border-[#292B2E] gap-2">
+                          <div className="flex items-center gap-4 flex-wrap font-mono">
+                            <span className="text-[#71717A]">
+                              تفصيل المسدد: راتب <span className="text-emerald-400 font-bold">{(stmt.paidSalary || stmt.salaryPaid || 0).toLocaleString()}</span> ج.م + عمولة <span className="text-amber-400 font-bold">{(stmt.paidCommission || 0).toLocaleString()}</span> ج.م
+                            </span>
+                            <span className="text-[#71717A]">|</span>
+                            <span className="text-[#71717A]">
+                              المعادلة: <span className="text-[#A1A1AA]">{stmt.salaryDue} + {stmt.commissionEarned} + {stmt.bonuses} - {stmt.deductions} = {stmt.totalDue}</span>
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`w-2 h-2 rounded-full ${
+                                stmt.remaining <= 0 ? "bg-emerald-500" : stmt.totalPaid > 0 ? "bg-amber-500" : "bg-gray-600"
+                              }`}
+                            ></span>
+                            <span className="text-[#A1A1AA] font-bold">
+                              {stmt.remaining <= 0 ? "مدفوع بالكامل" : stmt.totalPaid > 0 ? "مدفوع جزئياً" : "بانتظار الصرف"}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Expanded Drill-Down Panel with 5 Sub-Tabs */}
+                        {expandedStatement === stmt.id && (
+                          <div className="bg-[#1C1E21] border-t border-[#292B2E] p-4 space-y-4 animate-in slide-in-from-top-2 duration-150">
+                            {/* Sub-Tab Navigation Bar */}
+                            <div className="flex items-center gap-1 border-b border-[#292B2E] pb-2 overflow-x-auto text-xs">
+                              <button
+                                onClick={() => setStatementSubTabs((prev) => ({ ...prev, [stmt.id]: "contracts" }))}
+                                className={`px-3 py-1.5 rounded-xl font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                                  activeSubTab === "contracts"
+                                    ? "bg-[#292B2E] text-[#EDEDED] border border-[#35383C]"
+                                    : "text-[#A1A1AA] hover:text-[#EDEDED]"
+                                }`}
+                              >
+                                <FileText className="w-3.5 h-3.5 text-sky-400" />
+                                <span>عقود ومبيعات الشهر ({stmt.contractDetails?.length || 0})</span>
+                              </button>
+
+                              <button
+                                onClick={() => setStatementSubTabs((prev) => ({ ...prev, [stmt.id]: "deductions" }))}
+                                className={`px-3 py-1.5 rounded-xl font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                                  activeSubTab === "deductions"
+                                    ? "bg-[#292B2E] text-[#EDEDED] border border-[#35383C]"
+                                    : "text-[#A1A1AA] hover:text-[#EDEDED]"
+                                }`}
+                              >
+                                <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
+                                <span>الخصومات ({stmtDeductions.length})</span>
+                              </button>
+
+                              <button
+                                onClick={() => setStatementSubTabs((prev) => ({ ...prev, [stmt.id]: "bonuses" }))}
+                                className={`px-3 py-1.5 rounded-xl font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                                  activeSubTab === "bonuses"
+                                    ? "bg-[#292B2E] text-[#EDEDED] border border-[#35383C]"
+                                    : "text-[#A1A1AA] hover:text-[#EDEDED]"
+                                }`}
+                              >
+                                <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
+                                <span>المكافآت والتسويات ({stmtBonuses.length})</span>
+                              </button>
+
+                              <button
+                                onClick={() => setStatementSubTabs((prev) => ({ ...prev, [stmt.id]: "payments" }))}
+                                className={`px-3 py-1.5 rounded-xl font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                                  activeSubTab === "payments"
+                                    ? "bg-[#292B2E] text-[#EDEDED] border border-[#35383C]"
+                                    : "text-[#A1A1AA] hover:text-[#EDEDED]"
+                                }`}
+                              >
+                                <Receipt className="w-3.5 h-3.5 text-amber-400" />
+                                <span>حركات الصرف والمسدد ({stmtAllPays.length})</span>
+                              </button>
+
+                              <button
+                                onClick={() => setStatementSubTabs((prev) => ({ ...prev, [stmt.id]: "audit" }))}
+                                className={`px-3 py-1.5 rounded-xl font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                                  activeSubTab === "audit"
+                                    ? "bg-[#292B2E] text-[#EDEDED] border border-[#35383C]"
+                                    : "text-[#A1A1AA] hover:text-[#EDEDED]"
+                                }`}
+                              >
+                                <History className="w-3.5 h-3.5 text-[#C8A75A]" />
+                                <span>المعادلة وسجل التدقيق</span>
+                              </button>
+                            </div>
+
+                            {/* SUB-PANEL 1: CONTRACTS & SALES */}
+                            {activeSubTab === "contracts" && (
+                              <div className="space-y-3">
+                                <div className="flex items-center justify-between text-xs">
+                                  <p className="text-[#A1A1AA]">
+                                    قائمة العقود المبرمة خلال شهر <span className="font-mono text-[#EDEDED] font-bold">{stmt.period}</span> المعتمدة لاحتساب العمولة:
+                                  </p>
+                                </div>
+
+                                <div className="overflow-x-auto rounded-xl border border-[#292B2E]">
+                                  <table className="w-full text-right text-xs">
+                                    <thead className="bg-[#18191B] text-[#71717A] border-b border-[#292B2E]">
+                                      <tr>
+                                        <th className="p-2.5 font-bold">رقم العقد</th>
+                                        <th className="p-2.5 font-bold">العميل</th>
+                                        <th className="p-2.5 font-bold">التاريخ</th>
+                                        <th className="p-2.5 font-bold">قيمة العقد</th>
+                                        <th className="p-2.5 font-bold">حالة الأهلية للعمولة</th>
+                                        <th className="p-2.5 font-bold text-center">إجراء</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-[#292B2E]">
+                                      {(stmt.contractDetails || []).map((detail) => (
+                                        <tr key={detail.contractId} className="hover:bg-[#202225] transition-colors">
+                                          <td className="p-2.5 font-mono font-bold text-[#EDEDED]">{detail.contractNumber}</td>
+                                          <td className="p-2.5 font-bold text-[#EDEDED]">
+                                            <button
+                                              onClick={() => {
+                                                if (detail.customerId) {
+                                                  setSelectedCustomerIdFor360(detail.customerId);
+                                                }
+                                              }}
+                                              className="hover:text-[#C8A75A] transition-colors flex items-center gap-1 cursor-pointer text-right"
+                                              title="فتح سجل العميل Customer 360"
+                                            >
+                                              <span>{detail.customerName}</span>
+                                              {detail.customerId && <ExternalLink className="w-3 h-3 text-[#71717A]" />}
+                                            </button>
+                                          </td>
+                                          <td className="p-2.5 text-[#A1A1AA] font-mono">{detail.date}</td>
+                                          <td className="p-2.5 font-mono text-[#EDEDED] font-bold">{detail.totalValue.toLocaleString()} ج.م</td>
+                                          <td className="p-2.5">
+                                            <span
+                                              className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                                detail.isEligible ? "bg-emerald-950/40 text-emerald-400 border border-emerald-800/40" : "bg-rose-950/40 text-rose-400 border border-rose-800/40"
+                                              }`}
+                                            >
+                                              {detail.isEligible ? "مؤهل للعمولة" : "غير مؤهل"}
+                                            </span>
+                                          </td>
+                                          <td className="p-2.5 text-center">
+                                            {detail.customerId && (
+                                              <button
+                                                onClick={() => setSelectedCustomerIdFor360(detail.customerId)}
+                                                className="text-[11px] text-[#C8A75A] hover:underline cursor-pointer"
+                                              >
+                                                ملف العميل
+                                              </button>
+                                            )}
+                                          </td>
+                                        </tr>
+                                      ))}
+                                      {(!stmt.contractDetails || stmt.contractDetails.length === 0) && (
+                                        <tr>
+                                          <td colSpan={6} className="p-6 text-center italic text-[#71717A]">
+                                            لا توجد عقود مسجلة لهذا الموظف في هذا الشهر.
+                                          </td>
+                                        </tr>
+                                      )}
+                                    </tbody>
+                                  </table>
+                                </div>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-[#18191B] p-3 rounded-xl border border-[#292B2E] text-xs">
+                                  <div>
+                                    <p className="text-[10px] text-[#71717A] mb-0.5">إجمالي قيمة العقود المؤهلة</p>
+                                    <p className="text-sm font-black text-[#EDEDED] font-mono">{stmt.eligibleContractsTotal.toLocaleString()} ج.م</p>
                                   </div>
-                                ))}
+                                  <div>
+                                    <p className="text-[10px] text-[#71717A] mb-0.5">نسبة العمولة المطبقة</p>
+                                    <p className="text-sm font-black text-[#C8A75A] font-mono">{stmt.commissionRateUsed}%</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-[10px] text-[#C8A75A] mb-0.5">العمولة المحتسبة لهذا الشهر</p>
+                                    <p className="text-sm font-black text-emerald-400 font-mono">{stmt.commissionEarned.toLocaleString()} ج.م</p>
+                                  </div>
+                                </div>
                               </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  ))
+                            )}
+
+                            {/* SUB-PANEL 2: DEDUCTIONS */}
+                            {activeSubTab === "deductions" && (
+                              <div className="space-y-3">
+                                <div className="flex items-center justify-between">
+                                  <p className="text-xs text-[#A1A1AA]">
+                                    الخصومات المسجلة على الموظف لشهر <span className="font-mono text-[#EDEDED] font-bold">{stmt.period}</span>:
+                                  </p>
+                                  <button
+                                    onClick={() => setPeriodAdjustmentModal({ isOpen: true, period: stmt.period, type: "deduction" })}
+                                    className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                    <span>إضافة خصم لهذا الشهر</span>
+                                  </button>
+                                </div>
+
+                                <div className="overflow-x-auto rounded-xl border border-[#292B2E]">
+                                  <table className="w-full text-right text-xs">
+                                    <thead className="bg-[#18191B] text-[#71717A] border-b border-[#292B2E]">
+                                      <tr>
+                                        <th className="p-2.5 font-bold">التاريخ</th>
+                                        <th className="p-2.5 font-bold">المبلغ المخصوم</th>
+                                        <th className="p-2.5 font-bold">السبب والبيان</th>
+                                        <th className="p-2.5 font-bold">بواسطة</th>
+                                        <th className="p-2.5 font-bold text-center">إجراءات</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-[#292B2E]">
+                                      {stmtDeductions.length === 0 ? (
+                                        <tr>
+                                          <td colSpan={5} className="p-6 text-center text-[#71717A]">
+                                            لا توجد أي خصومات مسجلة على الموظف في هذا الشهر.
+                                          </td>
+                                        </tr>
+                                      ) : (
+                                        stmtDeductions.map((d) => (
+                                          <tr key={d.id} className="hover:bg-[#202225] transition-colors">
+                                            <td className="p-2.5 font-mono text-[#A1A1AA]">{d.date}</td>
+                                            <td className="p-2.5 font-mono font-bold text-rose-400">
+                                              -{Math.abs(d.amount).toLocaleString()} ج.م
+                                            </td>
+                                            <td className="p-2.5 text-[#EDEDED]">{d.reason}</td>
+                                            <td className="p-2.5 text-[#71717A]">{d.createdBy || "-"}</td>
+                                            <td className="p-2.5 text-center">
+                                              <div className="flex items-center justify-center gap-2">
+                                                <button
+                                                  onClick={() => setEditingAdjustment(d)}
+                                                  className="text-sky-400 hover:text-sky-300 text-[11px] underline cursor-pointer"
+                                                >
+                                                  تعديل
+                                                </button>
+                                                <button
+                                                  onClick={() => {
+                                                    if (window.confirm("هل أنت متأكد من حذف هذا الخصم؟")) {
+                                                      deleteCommissionAdjustment(employee.id, d.id);
+                                                      recalculateStatement(employee.id, stmt.period);
+                                                    }
+                                                  }}
+                                                  className="text-rose-400 hover:text-rose-300 text-[11px] underline cursor-pointer"
+                                                >
+                                                  حذف
+                                                </button>
+                                              </div>
+                                            </td>
+                                          </tr>
+                                        ))
+                                      )}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* SUB-PANEL 3: BONUSES & ADJUSTMENTS */}
+                            {activeSubTab === "bonuses" && (
+                              <div className="space-y-3">
+                                <div className="flex items-center justify-between">
+                                  <p className="text-xs text-[#A1A1AA]">
+                                    المكافآت والتسويات الإيجابية المعتمدة لشهر <span className="font-mono text-[#EDEDED] font-bold">{stmt.period}</span>:
+                                  </p>
+                                  <button
+                                    onClick={() => setPeriodAdjustmentModal({ isOpen: true, period: stmt.period, type: "bonus" })}
+                                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                    <span>إضافة مكافأة / تسوية</span>
+                                  </button>
+                                </div>
+
+                                <div className="overflow-x-auto rounded-xl border border-[#292B2E]">
+                                  <table className="w-full text-right text-xs">
+                                    <thead className="bg-[#18191B] text-[#71717A] border-b border-[#292B2E]">
+                                      <tr>
+                                        <th className="p-2.5 font-bold">التاريخ</th>
+                                        <th className="p-2.5 font-bold">المبلغ الإضافي</th>
+                                        <th className="p-2.5 font-bold">السبب والبيان</th>
+                                        <th className="p-2.5 font-bold">بواسطة</th>
+                                        <th className="p-2.5 font-bold text-center">إجراءات</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-[#292B2E]">
+                                      {stmtBonuses.length === 0 ? (
+                                        <tr>
+                                          <td colSpan={5} className="p-6 text-center text-[#71717A]">
+                                            لا توجد مكافآت أو تسويات إضافية مسجلة في هذا الشهر.
+                                          </td>
+                                        </tr>
+                                      ) : (
+                                        stmtBonuses.map((b) => (
+                                          <tr key={b.id} className="hover:bg-[#202225] transition-colors">
+                                            <td className="p-2.5 font-mono text-[#A1A1AA]">{b.date}</td>
+                                            <td className="p-2.5 font-mono font-bold text-emerald-400">
+                                              +{Math.abs(b.amount).toLocaleString()} ج.م
+                                            </td>
+                                            <td className="p-2.5 text-[#EDEDED]">{b.reason}</td>
+                                            <td className="p-2.5 text-[#71717A]">{b.createdBy || "-"}</td>
+                                            <td className="p-2.5 text-center">
+                                              <div className="flex items-center justify-center gap-2">
+                                                <button
+                                                  onClick={() => setEditingAdjustment(b)}
+                                                  className="text-sky-400 hover:text-sky-300 text-[11px] underline cursor-pointer"
+                                                >
+                                                  تعديل
+                                                </button>
+                                                <button
+                                                  onClick={() => {
+                                                    if (window.confirm("هل أنت متأكد من حذف هذه المكافأة؟")) {
+                                                      deleteCommissionAdjustment(employee.id, b.id);
+                                                      recalculateStatement(employee.id, stmt.period);
+                                                    }
+                                                  }}
+                                                  className="text-rose-400 hover:text-rose-300 text-[11px] underline cursor-pointer"
+                                                >
+                                                  حذف
+                                                </button>
+                                              </div>
+                                            </td>
+                                          </tr>
+                                        ))
+                                      )}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* SUB-PANEL 4: PAYMENTS & DISBURSEMENTS */}
+                            {activeSubTab === "payments" && (
+                              <div className="space-y-3">
+                                <div className="flex items-center justify-between">
+                                  <p className="text-xs text-[#A1A1AA]">
+                                    سجل سندات الصرف المالي المنفذة عن استحقاق شهر <span className="font-mono text-[#EDEDED] font-bold">{stmt.period}</span>:
+                                  </p>
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      onClick={() => {
+                                        setPaymentPeriodPreset(stmt.period);
+                                        setIsSalaryModalOpen(true);
+                                      }}
+                                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs"
+                                    >
+                                      <Plus className="w-3.5 h-3.5" />
+                                      <span>صرف راتب</span>
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        setPaymentPeriodPreset(stmt.period);
+                                        setTargetContractForCommission(null);
+                                        setIsCommissionModalOpen(true);
+                                      }}
+                                      className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs"
+                                    >
+                                      <Plus className="w-3.5 h-3.5" />
+                                      <span>صرف عمولة</span>
+                                    </button>
+                                  </div>
+                                </div>
+
+                                <div className="overflow-x-auto rounded-xl border border-[#292B2E]">
+                                  <table className="w-full text-right text-xs">
+                                    <thead className="bg-[#18191B] text-[#71717A] border-b border-[#292B2E]">
+                                      <tr>
+                                        <th className="p-2.5 font-bold">رقم السند</th>
+                                        <th className="p-2.5 font-bold">نوع الصرف</th>
+                                        <th className="p-2.5 font-bold">تاريخ الصرف</th>
+                                        <th className="p-2.5 font-bold">المبلغ المسدد</th>
+                                        <th className="p-2.5 font-bold">طريقة الصرف</th>
+                                        <th className="p-2.5 font-bold">البيان</th>
+                                        <th className="p-2.5 font-bold text-center">إجراءات</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-[#292B2E]">
+                                      {stmtAllPays.length === 0 ? (
+                                        <tr>
+                                          <td colSpan={7} className="p-6 text-center text-[#71717A]">
+                                            لم يتم صرف أي دفعات بعد عن هذا الشهر.
+                                          </td>
+                                        </tr>
+                                      ) : (
+                                        stmtAllPays.map((p) => (
+                                          <tr key={p.id} className="hover:bg-[#202225] transition-colors">
+                                            <td className="p-2.5 font-mono font-bold text-[#EDEDED]">{p.referenceNumber}</td>
+                                            <td className="p-2.5">
+                                              <span
+                                                className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                                  p.paymentType === "salary"
+                                                    ? "bg-emerald-950/40 text-emerald-400 border border-emerald-800/40"
+                                                    : "bg-amber-950/40 text-amber-400 border border-amber-800/40"
+                                                }`}
+                                              >
+                                                {p.paymentType === "salary" ? "صرف راتب" : "صرف عمولة"}
+                                              </span>
+                                            </td>
+                                            <td className="p-2.5 font-mono text-[#A1A1AA]">{p.paymentDate}</td>
+                                            <td className="p-2.5 font-mono font-bold text-emerald-400">{p.amount.toLocaleString()} ج.م</td>
+                                            <td className="p-2.5 text-[#EDEDED]">{p.paymentMethod}</td>
+                                            <td className="p-2.5 text-[#71717A] max-w-[150px] truncate" title={p.notes}>
+                                              {p.notes || "-"}
+                                            </td>
+                                            <td className="p-2.5 text-center">
+                                              <div className="flex items-center justify-center gap-2">
+                                                <button
+                                                  onClick={() => setEditingPayment({ type: p.paymentType, payment: p })}
+                                                  className="text-sky-400 hover:text-sky-300 text-[11px] underline cursor-pointer"
+                                                >
+                                                  تعديل
+                                                </button>
+                                                <button
+                                                  onClick={() => {
+                                                    if (window.confirm("هل أنت متأكد من إلغاء حركة الصرف هذه؟")) {
+                                                      if (p.paymentType === "salary") {
+                                                        deleteSalaryPayment(p.id);
+                                                      } else {
+                                                        deleteCommissionPayment(p.id);
+                                                      }
+                                                      recalculateStatement(employee.id, stmt.period);
+                                                    }
+                                                  }}
+                                                  className="text-rose-400 hover:text-rose-300 text-[11px] underline cursor-pointer"
+                                                >
+                                                  إلغاء الصرف
+                                                </button>
+                                              </div>
+                                            </td>
+                                          </tr>
+                                        ))
+                                      )}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* SUB-PANEL 5: AUDIT & MATHEMATICAL INTEGRITY */}
+                            {activeSubTab === "audit" && (
+                              <div className="space-y-4">
+                                <div className="bg-[#18191B] p-4 rounded-xl border border-[#292B2E] space-y-3">
+                                  <h6 className="text-xs font-bold text-[#EDEDED] flex items-center gap-2">
+                                    <FileSpreadsheet className="w-4 h-4 text-[#C8A75A]" />
+                                    <span>المعادلة الحسابية المعتمدة لاشتقاق القيم (Derived Math Trace)</span>
+                                  </h6>
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-mono">
+                                    <div className="p-3 bg-[#202225] rounded-xl border border-[#292B2E] space-y-1.5">
+                                      <p className="text-[10px] text-[#A1A1AA] font-sans">معادلة صافي المستحق (Net Entitlement):</p>
+                                      <p className="text-[#EDEDED]">
+                                        الراتب ({stmt.salaryDue}) + العمولة ({stmt.commissionEarned}) + المكافآت ({stmt.bonuses}) - الخصومات ({stmt.deductions})
+                                      </p>
+                                      <p className="text-[#C8A75A] font-bold text-sm">
+                                        = {stmt.totalDue.toLocaleString()} ج.م
+                                      </p>
+                                    </div>
+                                    <div className="p-3 bg-[#202225] rounded-xl border border-[#292B2E] space-y-1.5">
+                                      <p className="text-[10px] text-[#A1A1AA] font-sans">معادلة المتبقي المستحق (Outstanding Balance):</p>
+                                      <p className="text-[#EDEDED]">
+                                        صافي المستحق ({stmt.totalDue}) - إجمالي المدفوع ({stmt.totalPaid})
+                                      </p>
+                                      <p className="text-emerald-400 font-bold text-sm">
+                                        = {stmt.remaining.toLocaleString()} ج.م
+                                      </p>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Audit timestamps */}
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                                  <div className="p-3 bg-[#18191B] rounded-xl border border-[#292B2E]">
+                                    <p className="text-[10px] text-[#71717A] mb-1">تاريخ آخر احتساب</p>
+                                    <p className="font-mono text-[#EDEDED]">{stmt.calculatedAt ? new Date(stmt.calculatedAt).toLocaleString("ar-EG") : "آلي"}</p>
+                                  </div>
+                                  <div className="p-3 bg-[#18191B] rounded-xl border border-[#292B2E]">
+                                    <p className="text-[10px] text-[#71717A] mb-1">المراجعة (Review)</p>
+                                    <p className="text-[#EDEDED]">{stmt.reviewedBy ? `${stmt.reviewedBy} (${new Date(stmt.reviewedAt || "").toLocaleDateString("ar-EG")})` : "لم تتم بعد"}</p>
+                                  </div>
+                                  <div className="p-3 bg-[#18191B] rounded-xl border border-[#292B2E]">
+                                    <p className="text-[10px] text-[#71717A] mb-1">الاعتماد الرسمي (Approval)</p>
+                                    <p className="text-emerald-400 font-bold">{stmt.approvedBy ? `${stmt.approvedBy} (${new Date(stmt.approvedAt || "").toLocaleDateString("ar-EG")})` : "غير معتمد بعد"}</p>
+                                  </div>
+                                </div>
+
+                                {/* Manual Override History Trail */}
+                                {stmt.history && stmt.history.length > 0 && (
+                                  <div className="pt-2 space-y-2">
+                                    <div className="flex items-center gap-2 text-[#EDEDED] text-[11px] font-bold">
+                                      <History className="w-3.5 h-3.5 text-amber-500" />
+                                      <span>سجل التعديلات الإدارية على هذا الكشف</span>
+                                    </div>
+                                    <div className="space-y-2">
+                                      {stmt.history.map((h, idx) => (
+                                        <div key={idx} className="p-3 bg-[#18191B] rounded-xl border border-[#292B2E] flex flex-col gap-1 text-xs">
+                                          <div className="flex items-center justify-between">
+                                            <span className="text-[10px] font-bold text-amber-400">
+                                              تعديل {h.field === "salaryDue" ? "الراتب" : "العمولة"}
+                                            </span>
+                                            <span className="text-[10px] text-[#71717A] font-mono">{new Date(h.date).toLocaleString("ar-EG")}</span>
+                                          </div>
+                                          <p className="text-[#EDEDED]">
+                                            تم التغيير من <span className="font-mono text-[#A1A1AA] font-bold">{h.oldValue.toLocaleString()}</span> إلى <span className="font-mono text-emerald-400 font-bold">{h.newValue.toLocaleString()}</span> ج.م
+                                          </p>
+                                          <p className="text-[10px] text-[#A1A1AA]">
+                                            <span className="font-bold text-[#EDEDED]">السبب:</span> {h.reason || "تعديل يدوي"} | <span className="font-bold text-[#EDEDED]">بواسطة:</span> {h.user}
+                                          </p>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
                 )}
               </div>
             </div>
@@ -837,16 +1456,25 @@ export const EmployeeFinanceDetailModal: React.FC<EmployeeFinanceDetailModalProp
                             {p.notes || "-"}
                           </td>
                           <td className="p-3 text-center">
-                            <button
-                              onClick={() => {
-                                if (window.confirm("هل أنت متأكد من إلغاء حركة صرف الراتب هذه؟")) {
-                                  deleteSalaryPayment(p.id);
-                                }
-                              }}
-                              className="text-rose-400 hover:text-rose-300 text-[11px] underline cursor-pointer"
-                            >
-                              إلغاء
-                            </button>
+                            <div className="flex items-center justify-center gap-2">
+                              <button
+                                onClick={() => setEditingPayment({ type: "salary", payment: p })}
+                                className="text-sky-400 hover:text-sky-300 text-[11px] underline cursor-pointer"
+                              >
+                                تعديل
+                              </button>
+                              <button
+                                onClick={() => {
+                                  if (window.confirm("هل أنت متأكد من إلغاء حركة صرف الراتب هذه؟")) {
+                                    deleteSalaryPayment(p.id);
+                                    recalculateStatement(employee.id, p.period);
+                                  }
+                                }}
+                                className="text-rose-400 hover:text-rose-300 text-[11px] underline cursor-pointer"
+                              >
+                                إلغاء
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))
@@ -916,16 +1544,25 @@ export const EmployeeFinanceDetailModal: React.FC<EmployeeFinanceDetailModalProp
                             {cp.notes || "-"}
                           </td>
                           <td className="p-3 text-center">
-                            <button
-                              onClick={() => {
-                                if (window.confirm("هل أنت متأكد من إلغاء حركة صرف العمولة هذه؟")) {
-                                  deleteCommissionPayment(cp.id);
-                                }
-                              }}
-                              className="text-rose-400 hover:text-rose-300 text-[11px] underline cursor-pointer"
-                            >
-                              إلغاء
-                            </button>
+                            <div className="flex items-center justify-center gap-2">
+                              <button
+                                onClick={() => setEditingPayment({ type: "commission", payment: cp })}
+                                className="text-sky-400 hover:text-sky-300 text-[11px] underline cursor-pointer"
+                              >
+                                تعديل
+                              </button>
+                              <button
+                                onClick={() => {
+                                  if (window.confirm("هل أنت متأكد من إلغاء حركة صرف العمولة هذه؟")) {
+                                    deleteCommissionPayment(cp.id);
+                                    recalculateStatement(employee.id, cp.period);
+                                  }
+                                }}
+                                className="text-rose-400 hover:text-rose-300 text-[11px] underline cursor-pointer"
+                              >
+                                إلغاء
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))
@@ -1068,16 +1705,25 @@ export const EmployeeFinanceDetailModal: React.FC<EmployeeFinanceDetailModalProp
                           </td>
                           <td className="p-3 text-[#EDEDED]">{adj.reason}</td>
                           <td className="p-3 text-center">
-                            <button
-                              onClick={() => {
-                                if (window.confirm("هل أنت متأكد من حذف هذه التسوية؟")) {
-                                  deleteCommissionAdjustment(employee.id, adj.id);
-                                }
-                              }}
-                              className="text-rose-400 hover:text-rose-300 text-[11px] underline cursor-pointer"
-                            >
-                              حذف
-                            </button>
+                            <div className="flex items-center justify-center gap-2">
+                              <button
+                                onClick={() => setEditingAdjustment(adj)}
+                                className="text-sky-400 hover:text-sky-300 text-[11px] underline cursor-pointer"
+                              >
+                                تعديل
+                              </button>
+                              <button
+                                onClick={() => {
+                                  if (window.confirm("هل أنت متأكد من حذف هذه التسوية؟")) {
+                                    deleteCommissionAdjustment(employee.id, adj.id);
+                                    recalculateStatement(employee.id, adj.period);
+                                  }
+                                }}
+                                className="text-rose-400 hover:text-rose-300 text-[11px] underline cursor-pointer"
+                              >
+                                حذف
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))
@@ -1323,18 +1969,24 @@ export const EmployeeFinanceDetailModal: React.FC<EmployeeFinanceDetailModalProp
       {/* Sub Modals */}
       <RecordSalaryPaymentModal
         isOpen={isSalaryModalOpen}
-        onClose={() => setIsSalaryModalOpen(false)}
+        onClose={() => {
+          setIsSalaryModalOpen(false);
+          setPaymentPeriodPreset(null);
+        }}
         employee={employee}
-        period={period}
+        period={paymentPeriodPreset || period}
         remainingSalary={summaryData.salaryRemaining}
       />
 
       <RecordCommissionPaymentModal
         isOpen={isCommissionModalOpen}
-        onClose={() => setIsCommissionModalOpen(false)}
+        onClose={() => {
+          setIsCommissionModalOpen(false);
+          setPaymentPeriodPreset(null);
+        }}
         employee={employee}
         initialContract={targetContractForCommission}
-        period={period}
+        period={paymentPeriodPreset || period}
         remainingCommission={summaryData.commRemaining}
       />
 
@@ -1342,6 +1994,28 @@ export const EmployeeFinanceDetailModal: React.FC<EmployeeFinanceDetailModalProp
         isOpen={isEditStatementModalOpen}
         onClose={() => setIsEditStatementModalOpen(false)}
         statement={selectedStatement}
+      />
+
+      <EditPaymentModal
+        isOpen={Boolean(editingPayment)}
+        onClose={() => setEditingPayment(null)}
+        type={editingPayment?.type || "salary"}
+        payment={editingPayment?.payment}
+      />
+
+      <EditAdjustmentModal
+        isOpen={Boolean(editingAdjustment)}
+        onClose={() => setEditingAdjustment(null)}
+        adjustment={editingAdjustment}
+      />
+
+      <AddPeriodAdjustmentModal
+        isOpen={Boolean(periodAdjustmentModal?.isOpen)}
+        onClose={() => setPeriodAdjustmentModal(null)}
+        employeeId={employee.id}
+        companyId={employee.companyId}
+        period={periodAdjustmentModal?.period || period}
+        defaultType={periodAdjustmentModal?.type || "deduction"}
       />
     </div>
   );

@@ -360,6 +360,41 @@ export const cleanOpportunity = (o: any) => ({
   closedAt: o.closedAt || null,
 });
 
+export const cleanOpportunityUpdate = (updates: any) => {
+  const allowed = [
+    "companyId",
+    "customerId",
+    "inquiryId",
+    "title",
+    "stage",
+    "status",
+    "lossReason",
+    "lossNotes",
+    "expectedValue",
+    "productType",
+    "area",
+    "source",
+    "assignedTo",
+    "quotationId",
+    "contractId",
+    "lastContactDate",
+    "nextFollowUpDate",
+    "notes",
+    "updatedAt",
+    "closedAt",
+  ];
+  const cleaned: Record<string, any> = {};
+  for (const key of allowed) {
+    if (updates[key] !== undefined) {
+      cleaned[key] = updates[key];
+    }
+  }
+  if (updates.expectedValue !== undefined) {
+    cleaned.expectedValue = Number(updates.expectedValue) || 0;
+  }
+  return cleaned;
+};
+
 export const cleanEmployee = (e: any) => ({
   id: e.id,
   companyId: e.companyId,
@@ -504,12 +539,15 @@ export const cleanOwnerPayment = (op: any) => ({
 
 export const cleanCommissionAdjustment = (data: any) => ({
   id: data.id,
-  companyId: data.companyId || "all",
+  companyId: data.companyId,
   employeeId: data.employeeId,
   period: data.period,
   amount: Number(data.amount) || 0,
   reason: data.reason || "",
+  type: data.type || (Number(data.amount) < 0 ? "deduction" : Number(data.amount) > 0 ? "bonus" : "adjustment"),
+  contractId: data.contractId || null,
   createdAt: data.createdAt || new Date().toISOString(),
+  createdBy: data.createdBy || null,
 });
 
 export const cleanAuditLog = (data: any) => ({
@@ -563,5 +601,51 @@ export const cleanMonthlyStatement = (data: any) => ({
   contractDetails: Array.isArray(data.contractDetails) ? data.contractDetails : [],
   updatedAt: data.updatedAt || new Date().toISOString(),
 });
+
+export const cleanProduct = (p: any) => ({
+  id: p.id,
+  companyId: p.companyId || p.company_id,
+  name: p.name || "",
+  category: p.category || "عام",
+  type: p.type || "",
+  specifications: p.specifications || "",
+  unit: p.unit || "متر مربع",
+  price: Number(p.price) || 0,
+  cost: p.cost !== undefined ? Number(p.cost) : null,
+  status: p.status || "active",
+  createdAt: p.createdAt || new Date().toISOString(),
+  updatedAt: p.updatedAt || new Date().toISOString(),
+});
+
+export const cleanProductUpdate = (updates: any) => {
+  const allowed = [
+    "companyId",
+    "name",
+    "category",
+    "type",
+    "specifications",
+    "unit",
+    "price",
+    "cost",
+    "status",
+    "updatedAt",
+  ];
+  const cleaned: Record<string, any> = {};
+  for (const key of allowed) {
+    if (updates[key] !== undefined) {
+      cleaned[key] = updates[key];
+    }
+  }
+  if (updates.company_id && !cleaned.companyId) {
+    cleaned.companyId = updates.company_id;
+  }
+  if (updates.price !== undefined) {
+    cleaned.price = Number(updates.price) || 0;
+  }
+  if (updates.cost !== undefined) {
+    cleaned.cost = Number(updates.cost) || 0;
+  }
+  return cleaned;
+};
 
 

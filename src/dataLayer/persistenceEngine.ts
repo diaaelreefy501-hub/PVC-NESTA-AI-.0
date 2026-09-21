@@ -15,6 +15,10 @@ import {
   cleanCompany,
   cleanCompanyUpdate,
   cleanInteraction,
+  cleanOpportunity,
+  cleanOpportunityUpdate,
+  cleanProduct,
+  cleanProductUpdate,
   cleanEmployee,
   cleanEmployeeUpdate,
   cleanCommissionAdjustment,
@@ -711,6 +715,10 @@ export class PersistenceEngine {
         return cleanCommissionPayment(payload);
       case "monthly_statement":
         return cleanMonthlyStatement(payload);
+      case "opportunity":
+        return action === "insert" ? cleanOpportunity(payload) : cleanOpportunityUpdate(payload);
+      case "product":
+        return action === "insert" ? cleanProduct(payload) : cleanProductUpdate(payload);
       default:
         return payload;
     }
@@ -808,10 +816,11 @@ export class PersistenceEngine {
           this.markChangeVerified(change.id);
           return { success: true, message: "تم حذف الفرصة والتحقق منها بنجاح من قاعدة البيانات" };
         } else {
-          // Upsert opportunity
+          // Upsert opportunity to opportunities table and interactions backup
           let oppSuccess = false;
           try {
-            await supabase.from("opportunities").upsert([change.payload]);
+            const sanitizedOpp = this.sanitizeForTable("opportunity", change.payload, change.action);
+            await supabase.from("opportunities").upsert([sanitizedOpp]);
             const { data: readBack } = await supabase.from("opportunities").select("id").eq("id", change.recordId).maybeSingle();
             if (readBack) oppSuccess = true;
           } catch {

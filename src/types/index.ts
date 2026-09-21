@@ -228,8 +228,11 @@ export interface CommissionAdjustment {
   amount: number; // Positive for bonus, negative for deduction
   period: string; // YYYY-MM
   reason: string;
-  date: string; // YYYY-MM-DD
+  date?: string; // YYYY-MM-DD
+  type?: "adjustment" | "bonus" | "deduction";
+  contractId?: string | null;
   createdAt: string;
+  createdBy?: string | null;
 }
 
 export interface CommissionRateRecord {
@@ -243,7 +246,7 @@ export interface CommissionRateRecord {
   createdAt: string;
 }
 
-export type StatementApprovalStatus = 'calculated' | 'reviewed' | 'approved' | 'paid';
+export type StatementApprovalStatus = 'calculated' | 'draft' | 'reviewed' | 'approved' | 'partially_paid' | 'paid';
 
 export interface StatementContractDetail {
   id: string;
