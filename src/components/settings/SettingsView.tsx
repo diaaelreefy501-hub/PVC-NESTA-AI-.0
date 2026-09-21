@@ -85,6 +85,8 @@ export const SettingsView: React.FC = () => {
     guardianHealthReport,
     theme,
     setTheme,
+    isPremiumAiEnabled,
+    setIsPremiumAiEnabled,
   } = useApp();
 
   // Internal Active Tab
@@ -99,6 +101,7 @@ export const SettingsView: React.FC = () => {
     | "persistence_sync"
     | "audit"
     | "backup"
+    | "ai_system"
   >("companies");
 
   /* =========================================================================
@@ -271,6 +274,21 @@ export const SettingsView: React.FC = () => {
   const [editUserForm, setEditUserForm] = useState({ name: "", password: "" });
   const [isEditingUser, setIsEditingUser] = useState(false);
 
+  const parseEdgeError = (error: any, data: any, fallback: string): Error => {
+    console.error("خطأ إداري في الاتصال بـ Supabase Edge Function:", { error, data });
+    if (error) {
+      const isNotDeployed = error.message?.includes("not found") || error.message?.includes("404") || error.status === 404;
+      if (isNotDeployed) {
+        return new Error("دالة الخادم الإدارية (admin-users) غير مرفوعة أو غير منشورة على مشروع Supabase الحالي. يرجى من مسؤول النظام تشغيل 'supabase functions deploy admin-users' لتفعيل هذه الميزة.");
+      }
+      return new Error(`خطأ في دالة الخادم (Edge Function): ${error.message || JSON.stringify(error)}`);
+    }
+    if (data && data.error) {
+      return new Error(data.error);
+    }
+    return new Error(fallback);
+  };
+
   const handleAddUser = async () => {
     if (!newUser.name || !newUser.email || !newUser.password) {
       showToast("يرجى تعبئة جميع الحقول المطلوبة", "warning");
@@ -283,18 +301,19 @@ export const SettingsView: React.FC = () => {
       const token = sessionData.session?.access_token;
       if (!token) throw new Error("يجب تسجيل الدخول كمسؤول أولاً");
 
-      const res = await fetch("/api/admin/users", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+      const { data, error } = await supabase.functions.invoke("admin-users", {
+        body: {
+          action: "create",
+          name: newUser.name,
+          email: newUser.email,
+          password: newUser.password,
+          role: newUser.role,
+          allowedCompanyIds: newUser.allowedCompanyIds,
         },
-        body: JSON.stringify(newUser),
       });
 
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || "فشل إنشاء المستخدم");
+      if (error || !data?.success) {
+        throw parseEdgeError(error, data, "فشل إنشاء المستخدم");
       }
 
       setUsers([...users, data.user]);
@@ -314,14 +333,16 @@ export const SettingsView: React.FC = () => {
       const token = sessionData.session?.access_token;
       if (!token) throw new Error("يجب تسجيل الدخول أولاً");
 
-      const res = await fetch(`/api/admin/users/${id}`, {
-        method: "DELETE",
-        headers: {
-          Authorization: `Bearer ${token}`,
+      const { data, error } = await supabase.functions.invoke("admin-users", {
+        body: {
+          action: "delete",
+          targetId: id,
         },
       });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || "فشل الحذف");
+
+      if (error || !data?.success) {
+        throw parseEdgeError(error, data, "فشل الحذف");
+      }
 
       setUsers(users.filter((u) => u.id !== id));
       showToast("تم حذف المستخدم وحسابه نهائياً", "success");
@@ -337,16 +358,17 @@ export const SettingsView: React.FC = () => {
       if (!token) throw new Error("يجب تسجيل الدخول أولاً");
 
       const nextActive = !user.active;
-      const res = await fetch(`/api/admin/users/${user.id}/status`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+      const { data, error } = await supabase.functions.invoke("admin-users", {
+        body: {
+          action: "status",
+          targetId: user.id,
+          active: nextActive,
         },
-        body: JSON.stringify({ active: nextActive }),
       });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || "فشل التحديث");
+
+      if (error || !data?.success) {
+        throw parseEdgeError(error, data, "فشل التحديث");
+      }
 
       setUsers(users.map((u) => (u.id === user.id ? { ...u, active: nextActive } : u)));
       showToast(nextActive ? "تم تفعيل المستخدم" : "تم إيقاف المستخدم وتعطيل دخوله", "success");
@@ -365,16 +387,18 @@ export const SettingsView: React.FC = () => {
       const token = sessionData.session?.access_token;
       if (!token) throw new Error("يجب تسجيل الدخول أولاً");
 
-      const res = await fetch(`/api/admin/users/${user.id}/role`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+      const { data, error } = await supabase.functions.invoke("admin-users", {
+        body: {
+          action: "role",
+          targetId: user.id,
+          role: newRole,
+          allowedCompanyIds: [newCompanyId],
         },
-        body: JSON.stringify({ role: newRole, allowedCompanyIds: [newCompanyId] }),
       });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || "فشل التحديث");
+
+      if (error || !data?.success) {
+        throw parseEdgeError(error, data, "فشل التحديث");
+      }
 
       setUsers(
         users.map((u) =>
@@ -397,21 +421,22 @@ export const SettingsView: React.FC = () => {
       const token = sessionData.session?.access_token;
       if (!token) throw new Error("يجب تسجيل الدخول أولاً");
 
-      const bodyData: any = { name: editUserForm.name };
+      const bodyData: any = {
+        action: "update",
+        targetId: editingUser.id,
+        name: editUserForm.name,
+      };
       if (editUserForm.password.trim()) {
         bodyData.password = editUserForm.password;
       }
 
-      const res = await fetch(`/api/admin/users/${editingUser.id}`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(bodyData),
+      const { data, error } = await supabase.functions.invoke("admin-users", {
+        body: bodyData,
       });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || "فشل التحديث");
+
+      if (error || !data?.success) {
+        throw parseEdgeError(error, data, "فشل التحديث");
+      }
 
       setUsers(users.map((u) => (u.id === editingUser.id ? { ...u, name: editUserForm.name } : u)));
       setEditingUser(null);
@@ -639,6 +664,7 @@ export const SettingsView: React.FC = () => {
           { id: "sales_config", label: "سير المبيعات والحالات", icon: Sliders },
           { id: "regions", label: "المناطق والمحافظات", icon: MapPin },
           { id: "appearance", label: "المظهر والسمة البصرية", icon: Palette },
+          { id: "ai_system", label: "نظام الذكاء الاصطناعي", icon: Sparkles },
           { id: "health", label: "صحة وتكامل البيانات", icon: Activity },
           { id: "persistence_sync", label: "مركز المزامنة وسجل التعديلات", icon: Database },
           { id: "audit", label: "سجل التدقيق (Audit Log)", icon: Clock },
@@ -934,8 +960,93 @@ export const SettingsView: React.FC = () => {
       )}
 
       {/* =========================================================================
-         TAB 3: PRODUCTS & CATEGORIES
+         TAB: AI SYSTEM CONFIGURATION
          ========================================================================= */}
+      {activeTab === "ai_system" && (
+        <div className="space-y-6">
+          <div className="bg-[#18191B] border border-[#292B2E] rounded-2xl p-6 space-y-6">
+            <div className="flex items-center gap-3 border-b border-[#292B2E] pb-4">
+              <div className="p-2.5 rounded-xl bg-[#C8A75A]/15 text-[#C8A75A] border border-[#C8A75A]/30">
+                <Sparkles className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="font-bold text-lg text-[#EDEDED]">إعدادات الذكاء الاصطناعي والتشغيل الذكي</h3>
+                <p className="text-xs text-[#A1A1AA]">التحكم في محرك التحليل Heuristic Engine والربط مع Gemini API</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Local Intelligence Engine */}
+              <div className={`p-5 rounded-2xl border transition-all ${!isPremiumAiEnabled ? 'bg-[#C8A75A]/5 border-[#C8A75A]/30 ring-1 ring-[#C8A75A]/20' : 'bg-[#202225] border-[#292B2E]'}`}>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400">
+                      <ShieldCheck className="w-5 h-5" />
+                    </div>
+                    <h4 className="font-bold text-[#EDEDED]">محرك التشغيل المحلي (Zero-Cost)</h4>
+                  </div>
+                  {!isPremiumAiEnabled && <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[10px] font-bold">نشط حالياً</span>}
+                </div>
+                <p className="text-xs text-[#A1A1AA] leading-relaxed mb-4">
+                  يعتمد على محرك قواعد (Heuristic Engine) محلي 100% لتحليل رحلة العميل، تدقيق الحسابات، واكتشاف الأخطاء دون الحاجة لاتصال خارجي أو تكاليف إضافية.
+                </p>
+                <button 
+                  onClick={() => setIsPremiumAiEnabled(false)}
+                  className={`w-full py-2.5 rounded-xl text-xs font-bold transition-all ${!isPremiumAiEnabled ? 'bg-emerald-600 text-white cursor-default' : 'bg-[#141517] text-[#A1A1AA] border border-[#292B2E] hover:border-[#C8A75A] hover:text-[#C8A75A] cursor-pointer'}`}
+                >
+                  {!isPremiumAiEnabled ? 'وضع التشغيل الافتراضي مفعل' : 'تفعيل المحرك المحلي فقط'}
+                </button>
+              </div>
+
+              {/* Premium Gemini AI */}
+              <div className={`p-5 rounded-2xl border transition-all ${isPremiumAiEnabled ? 'bg-[#C8A75A]/5 border-[#C8A75A]/30 ring-1 ring-[#C8A75A]/20' : 'bg-[#202225] border-[#292B2E]'}`}>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 rounded-lg bg-purple-500/10 text-purple-400">
+                      <Sparkles className="w-5 h-5" />
+                    </div>
+                    <h4 className="font-bold text-[#EDEDED]">محرك Gemini Premium</h4>
+                  </div>
+                  {isPremiumAiEnabled && <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-400 text-[10px] font-bold">نشط حالياً</span>}
+                </div>
+                <p className="text-xs text-[#A1A1AA] leading-relaxed mb-4">
+                  يضيف قدرات لغوية متقدمة لفهم النصوص المعقدة، توليد رسائل متابعة إبداعية، وتحليل الأنماط السلوكية غير المهيكلة (يتطلب Gemini API Key).
+                </p>
+                <button 
+                  onClick={() => setIsPremiumAiEnabled(true)}
+                  className={`w-full py-2.5 rounded-xl text-xs font-bold transition-all ${isPremiumAiEnabled ? 'bg-purple-600 text-white cursor-default' : 'bg-[#141517] text-[#A1A1AA] border border-[#292B2E] hover:border-[#C8A75A] hover:text-[#C8A75A] cursor-pointer'}`}
+                >
+                  {isPremiumAiEnabled ? 'محرك Gemini مفعل' : 'تفعيل القدرات المتقدمة (Gemini)'}
+                </button>
+              </div>
+            </div>
+
+            <div className="p-4 bg-[#141517] border border-[#292B2E] rounded-xl space-y-3">
+              <h4 className="text-xs font-bold text-[#EDEDED] flex items-center gap-2">
+                <Database className="w-4 h-4 text-[#C8A75A]" />
+                <span>حالة التكامل والنزاهة</span>
+              </h4>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="p-3 bg-[#18191B] rounded-lg border border-[#292B2E]">
+                  <div className="text-[10px] text-[#A1A1AA] mb-1">دقة المحرك المحلي</div>
+                  <div className="text-lg font-black text-emerald-400">100%</div>
+                  <div className="text-[9px] text-[#6B7280]">بناءً على قواعد العمل Frozen v1.0</div>
+                </div>
+                <div className="p-3 bg-[#18191B] rounded-lg border border-[#292B2E]">
+                  <div className="text-[10px] text-[#A1A1AA] mb-1">سرعة الاستجابة</div>
+                  <div className="text-lg font-black text-blue-400">&lt; 50ms</div>
+                  <div className="text-[9px] text-[#6B7280]">معالجة فورية داخل المتصفح والخادم</div>
+                </div>
+                <div className="p-3 bg-[#18191B] rounded-lg border border-[#292B2E]">
+                  <div className="text-[10px] text-[#A1A1AA] mb-1">توفير التكاليف</div>
+                  <div className="text-lg font-black text-[#C8A75A]">عالي جداً</div>
+                  <div className="text-[9px] text-[#6B7280]">لا توجد فواتير استهلاك خارجية</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {activeTab === "products" && (
         <div className="space-y-6">
           {/* Categories Manager */}

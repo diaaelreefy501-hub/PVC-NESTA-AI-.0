@@ -35,6 +35,7 @@ export const SmartAiIntake: React.FC<SmartAiIntakeProps> = ({ onClose, isEmbedde
     findCustomerByPhone,
     setCurrentTab,
     setSelectedCustomerIdFor360,
+    isPremiumAiEnabled,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<"smart" | "manual">("smart");
@@ -141,6 +142,7 @@ export const SmartAiIntake: React.FC<SmartAiIntakeProps> = ({ onClose, isEmbedde
         body: JSON.stringify({
           text: inputText,
           existingCompanies: companies,
+          enablePremiumAi: isPremiumAiEnabled,
         }),
       });
 

@@ -416,6 +416,8 @@ interface AppContextType {
   setIsHealthCenterOpen: (open: boolean) => void;
   selectedMetricForLineage: string | null;
   setSelectedMetricForLineage: (metricKey: string | null) => void;
+  isPremiumAiEnabled: boolean;
+  setIsPremiumAiEnabled: (enabled: boolean) => void;
   salesManualAdjustment: number;
   setSalesManualAdjustment: (val: number) => void;
   salesOverrideValue: number | null;
@@ -858,6 +860,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
   const [isAiEmergencyStopEnabled, setIsAiEmergencyStopEnabled] = useState<boolean>(() => getInitial("isAiEmergencyStopEnabled", false));
   const [isHealthCenterOpen, setIsHealthCenterOpen] = useState<boolean>(false);
   const [selectedMetricForLineage, setSelectedMetricForLineage] = useState<string | null>(null);
+  const [isPremiumAiEnabled, setIsPremiumAiEnabledState] = useState<boolean>(() => {
+    const saved = localStorage.getItem(STORAGE_PREFIX + "isPremiumAiEnabled");
+    return saved === "true"; // Default to false (Zero-Cost)
+  });
+
+  const setIsPremiumAiEnabled = (enabled: boolean) => {
+    setIsPremiumAiEnabledState(enabled);
+    localStorage.setItem(STORAGE_PREFIX + "isPremiumAiEnabled", JSON.stringify(enabled));
+    if (supabase && session) {
+      supabase.from("companies").upsert({
+        id: "config_ai_system",
+        name: "AI Configuration Settings",
+        active: enabled,
+        color: "#000000",
+        badgeBg: "#000000",
+        badgeText: "#ffffff",
+        phone: "",
+        monthlyTarget: 0,
+        logoText: "AI"
+      }).then(({ error }) => {
+        if (error) {
+          console.error("Failed to persist AI setting to Supabase:", error);
+        }
+      });
+    }
+  };
 
   const [salesManualAdjustment, setSalesManualAdjustmentState] = useState<number>(() => {
     const saved = localStorage.getItem(STORAGE_PREFIX + "salesManualAdjustment");
@@ -1385,6 +1413,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         
         // Supabase is the EXCLUSIVE source of truth (with client-side logo preservation):
         if (compRes.data) {
+          // Parse global config settings from config_ai_system company record
+          const aiConfigComp = compRes.data.find((c: any) => c.id === "config_ai_system");
+          const isAiEnabled = aiConfigComp ? aiConfigComp.active === true : false;
+          setIsPremiumAiEnabledState(isAiEnabled);
+          localStorage.setItem(STORAGE_PREFIX + "isPremiumAiEnabled", JSON.stringify(isAiEnabled));
+
           const localLogosRaw = localStorage.getItem(STORAGE_PREFIX + "companies");
           let cachedLogos: Record<string, string> = {};
           if (localLogosRaw) {
@@ -1397,7 +1431,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
               }
             } catch {}
           }
-          const loadedComps = (compRes.data as Company[]).map((c) => {
+          // Filter out config_ai_system from the active companies array so it doesn't show in UI list
+          const visibleComps = compRes.data.filter((c: any) => c.id !== "config_ai_system");
+          const loadedComps = (visibleComps as Company[]).map((c) => {
             const persistentLogo = c.logoUrl || cachedLogos[c.id] || localStorage.getItem(STORAGE_PREFIX + `comp_logo_${c.id}`);
             return {
               ...c,
@@ -8555,6 +8591,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         setIsHealthCenterOpen,
         selectedMetricForLineage,
         setSelectedMetricForLineage,
+        isPremiumAiEnabled,
+        setIsPremiumAiEnabled,
         salesManualAdjustment,
         setSalesManualAdjustment,
         salesOverrideValue,

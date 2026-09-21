@@ -57,6 +57,7 @@ export const DashboardView: React.FC = () => {
     salesOverrideValue,
     salesManualAdjustment,
     opportunities,
+    isPremiumAiEnabled,
   } = useApp();
 
   const [greeting, setGreeting] = useState("");
@@ -79,12 +80,46 @@ export const DashboardView: React.FC = () => {
 
   const getStrategicAdvice = async () => {
     setLoadingAdvice(true);
+    if (!isPremiumAiEnabled) {
+      // Local Heuristic Strategy Engine (instant, zero-cost)
+      setTimeout(() => {
+        let adviceText = "تقرير الأداء الاستراتيجي (محرك التشغيل المحلي):\n\n";
+        
+        if (overdueFollowUps.length > 0) {
+          adviceText += `⚠️ عندك ${overdueFollowUps.length} متابعات متأخرة! الأولوية رقم 1 هي الاتصال بهؤلاء العملاء فوراً لحسم الصفقات المعلقة.\n\n`;
+        }
+        if (hotCustomers.length > 0) {
+          adviceText += `🔥 هناك ${hotCustomers.length} عملاء ساخنين (Hot) جاهزين للإغلاق. تأكد من إعداد عروض الأسعار المناسبة لهم ومتابعتهم اليوم.\n\n`;
+        }
+        
+        const achievePercent = monthlyTargetTotal > 0 ? Math.round((monthlySalesTotal / monthlyTargetTotal) * 100) : 0;
+        if (achievePercent < 50) {
+          adviceText += `📈 نسبة تحقيق التارجت ${achievePercent}%. تحتاج لتكثيف المكالمات وتسجيل عروض أسعار جديدة لتنشيط حركة المبيعات.\n\n`;
+        } else if (achievePercent >= 100) {
+          adviceText += `🎉 مبروك! حققت الهدف الشهري بنسبة ${achievePercent}%! حافظ على هذا الزخم البيعي الرائع.\n\n`;
+        } else {
+          adviceText += `💪 حققت ${achievePercent}% من الهدف الشهري. ركز على التفاوض مع العملاء المترددين للوصول إلى التارجت قريباً.\n\n`;
+        }
+
+        if (filteredInquiries.length > 0) {
+          adviceText += `📥 استقبلت ${filteredInquiries.length} استفسارات مؤخراً. لا تتركها بدون تسعير أو تواصل لأكثر من 24 ساعة لضمان الجدية.`;
+        } else {
+          adviceText += "💡 ركز اليوم على تنشيط قاعدة البيانات والعملاء السابقين لعرض عروض صيانة أو خدمات إضافية.";
+        }
+
+        setAiAdvice(adviceText);
+        setLoadingAdvice(false);
+      }, 350);
+      return;
+    }
+
     try {
       const response = await fetch("/api/gemini/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: "قدم لي نصيحة استراتيجية سريعة كمدير مبيعات بناءً على وضع اليوم الحالي.",
+          enablePremiumAi: isPremiumAiEnabled,
           context: {
             customersCount: filteredCustomers.length,
             inquiriesCount: filteredInquiries.length,

@@ -5,6 +5,11 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
+import { 
+  analyzeCustomerHeuristics, 
+  performHealthCheck, 
+  parseOperationalCommand 
+} from "./src/utils/operationalIntelligence";
 
 dotenv.config();
 
@@ -91,22 +96,25 @@ app.get("/api/client-diagnostic", (_req, res) => {
 });
 
 app.post("/api/gemini/intake", async (req, res) => {
-  const { text, existingCompanies } = req.body;
+  const { text, existingCompanies, enablePremiumAi } = req.body;
   if (!text || typeof text !== "string") {
     return res.status(400).json({ error: "النص مطلوب" });
   }
 
-  const prompt = `أنت المساعد الذكي لنظام "PVC NESTA AI" المتخصص في قطاعات UPVC والألومنيوم في مصر.
+  // 1. Always start with the deterministic heuristic extractor
+  const fallbackData = extractSmartFallback(text);
+
+  // 2. Only use Gemini if enabled from frontend AND allowed in env
+  const isPremiumEnabled = enablePremiumAi === true && process.env.ENABLE_PREMIUM_AI === "true";
+
+  if (isPremiumEnabled && process.env.GEMINI_API_KEY) {
+    try {
+      const ai = getGenAI();
+      const prompt = `أنت المساعد الذكي لنظام "PVC NESTA AI" المتخصص في قطاعات UPVC والألومنيوم في مصر.
 مهمتك استخراج بيانات العميل بدقة من النص التالي بدون أي تأليف أو اختلاق.
 إذا كانت أي معلومة غير مذكورة بوضوح، اجعل قيمتها نصاً فارغاً أو null.
 صنف درجة الاهتمام إلى: "hot" أو "warm" أو "cold".
 القناة المصدرية: WhatsApp أو Facebook أو Phone Call أو Instagram أو "Manual".
-
-أمثلة على المدخلات المحتملة:
-- «أحمد — التجمع — 0103747784 — معاينة»
-- «أحمد التجمع 0103747784 عرض سعر 66800»
-- «أحمد التجمع 0103747784 متابعة»
-- «العميل يريد معاينة ثم عرض سعر تقريبي بقيمة 66800»
 
 النص المراد تحليله:
 """${text}"""
@@ -130,9 +138,6 @@ app.post("/api/gemini/intake", async (req, res) => {
   "needsInspection": true أو false
 }`;
 
-  try {
-    if (process.env.GEMINI_API_KEY) {
-      const ai = getGenAI();
       const response = await ai.models.generateContent({
         model: "gemini-3.6-flash",
         contents: prompt,
@@ -143,30 +148,26 @@ app.post("/api/gemini/intake", async (req, res) => {
       });
 
       const raw = response.text || "{}";
-      try {
-        const parsed = JSON.parse(raw);
-        return res.json({ success: true, data: parsed });
-      } catch (err) {
-        const cleanJson = raw.replace(/```json/g, "").replace(/```/g, "").trim();
-        const parsed = JSON.parse(cleanJson);
-        return res.json({ success: true, data: parsed });
-      }
+      const parsed = JSON.parse(raw.replace(/```json/g, "").replace(/```/g, "").trim());
+      // Merge: AI data usually better for names/details if successful
+      return res.json({ success: true, data: { ...fallbackData, ...parsed } });
+    } catch (error: any) {
+      console.warn("Gemini Intake failed, using heuristics:", error?.message);
     }
-  } catch (error: any) {
-    console.warn("Gemini API call failed, falling back to smart heuristic extractor:", error?.message);
   }
 
-  const fallbackData = extractSmartFallback(text);
-  return res.json({ success: true, data: fallbackData, fallback: true });
+  return res.json({ success: true, data: fallbackData, heuristic: true });
 });
 
 app.post("/api/gemini/analyze-customer", async (req, res) => {
-  const { customer, quotations, interactions, followUps } = req.body;
+  const { customer, quotations, interactions, followUps, enablePremiumAi } = req.body;
 
   if (!customer) {
     return res.status(400).json({ error: "بيانات العميل مطلوبة" });
   }
 
+  const isPremiumEnabled = enablePremiumAi === true && process.env.ENABLE_PREMIUM_AI === "true";
+  
   const prompt = `أنت رئيس مبيعات استشاري خبير في قطاعات UPVC والألومنيوم في مصر.
 قم بتحليل بيانات العميل التالية ومسار تعاملاته لتقديم توصية بيعية حاسمة:
 
@@ -191,105 +192,83 @@ app.post("/api/gemini/analyze-customer", async (req, res) => {
 }`;
 
   try {
-    if (process.env.GEMINI_API_KEY) {
-      const ai = getGenAI();
-      const response = await ai.models.generateContent({
-        model: "gemini-3.6-flash",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          temperature: 0.2,
-        },
-      });
+    // 1. Perform deterministic heuristic analysis first
+    const analysis = analyzeCustomerHeuristics(customer, quotations, interactions, followUps);
 
-      const parsed = JSON.parse(response.text || "{}");
-      return res.json({ success: true, analysis: parsed });
+    // 2. Only use Gemini if enabled
+    if (isPremiumEnabled && process.env.GEMINI_API_KEY) {
+      try {
+        const ai = getGenAI();
+        const response = await ai.models.generateContent({
+          model: "gemini-3.6-flash",
+          contents: prompt,
+          config: {
+            responseMimeType: "application/json",
+            temperature: 0.2,
+          },
+        });
+        const parsed = JSON.parse(response.text || "{}");
+        return res.json({ success: true, analysis: { ...analysis, ...parsed } });
+      } catch (err: any) {
+        console.warn("Gemini Enhancement failed, using heuristics:", err?.message);
+      }
     }
-  } catch (err: any) {
-    console.error("AI Customer Analysis Error:", err?.message);
-  }
 
-  return res.json({
-    success: true,
-    analysis: {
-      dealHealthScore: customer.interestLevel === "hot" ? 85 : 55,
-      riskFactor: "احتمال استلام عروض أسعار من منافسين أو تأجيل البت في المواصفات.",
-      recommendedAction: "التواصل لتقديم ميزة تأكيد السعر قبل أي تحديث في أسعار القطاعات.",
-      smartFollowupMessage: `مساء الخير يا بشمهندس ${customer.name}، بنتابع مع حضرتك مقايسة الـ UPVC لتأكيد موعد التوريد وتثبيت نسبة الخصم لحضرتك. هل يناسبك نراجع التفاصيل هاتفياً؟`,
-      bestTimeToSend: "فوراً",
-    },
-  });
+    return res.json({ success: true, analysis });
+  } catch (err: any) {
+    console.error("Operational Analysis Error:", err?.message);
+    return res.status(500).json({ error: "فشل تحليل البيانات" });
+  }
 });
 
 app.post("/api/gemini/chat", async (req, res) => {
-  const { message, mode = "ask", context } = req.body;
+  const { message, mode = "ask", context, enablePremiumAi } = req.body;
   if (!message) {
     return res.status(400).json({ error: "الرسالة مطلوبة" });
   }
 
-  const prompt = `أنت "NESTA AI" - الوكيل الذكي الشامل والمستشار التشغيلي لمنظومة إدارة مبيعات وعمليات شركات UPVC والألومنيوم في مصر (PVC NESTA AI).
-أنت تدعم 3 أنماط عمل أساسية:
-1. نمط السؤال والاستفسار (ASK): تقديم إجابات وتحليلات ومقارنات دقيقة وسريعة بلهجة عمل مصرية مباشرة واحترافية.
-2. نمط الفحص والتدقيق (CHECK): تشخيص ملفات العملاء، تدقيق العلاقات وقواعد العمل، فحص خط سير البيانات وعزل الشركات.
-3. نمط التنفيذ الميداني (ACT): اقتراح وتجهيز أوامر تشغيلية محددة مثل جدولة المتابعات، تحديث الحالات، تعيين المسؤولين، وإصلاح المشكلات.
+  const isPremiumEnabled = enablePremiumAi === true && process.env.ENABLE_PREMIUM_AI === "true";
 
-النمط الحالي المطلوب: ${mode.toUpperCase()}
-سياق الشاشة الحالية والبيانات:
-- الشاشة الحالية: ${context?.currentPage || "dashboard"}
-- الشركة النشطة: ${context?.activeCompanyName || "كافة الشركات"} (ID: ${context?.activeCompanyId || "all"})
-- العميل المحدد حالياً: ${context?.selectedCustomer ? JSON.stringify(context.selectedCustomer) : "لا يوجد"}
-- عدد العناصر المحددة في الجدول: ${context?.selectedRecordsCount || 0}
-- إجمالي العملاء: ${context?.customersCount || 0}
-- الاستفسارات المفتوحة: ${context?.inquiriesCount || 0}
-- متابعات اليوم: ${context?.todayFollowupsCount || 0}
-- المتابعات المتأخرة: ${context?.overdueFollowupsCount || 0}
-- العملاء الساخنون (Hot): ${context?.hotCustomersCount || 0}
-- مبيعات هذا الشهر: ${Number(context?.monthlySalesTotal || 0).toLocaleString()} ج.م
-- المستهدف الشهري: ${Number(context?.monthlyTargetTotal || 0).toLocaleString()} ج.م
-- الشركات بالنظام: ${context?.companiesNames?.join(", ") || "PVC NESTA"}
-- التنبيهات المفتوحة: ${context?.openAlertsCount || 0}
-- الحوادث المكتشفة: ${context?.openIncidentsCount || 0}
-${context?.localReasoningSummary ? `\n--- تحليل وتدقيق السجلات المحلي (مؤكد وصحيح 100%): \n${context.localReasoningSummary}\n---` : ""}
-
-طلب المستخدم:
-"""${message}"""
-
-المطلوب:
-أجب باللغة العربية بأسلوب مستشار مبيعات وعمليات خبير بالعامية المصرية الراقية والعملية الفعالة. اعتمد بالكامل على "تحليل وتدقيق السجلات المحلي" المرفق أعلاه للإجابة على الفروقات المالية أو مسار العميل، ولا تقم باختلاق (Hallucinate) أي أرقام، أسماء، تواريخ، أو علاقات من خارج هذا السياق. إذا كان السؤال عن مصدر رقم أو إحصائية أو تدقيق، وضّح الحساب بدقة.
-إذا كان الطلب ينطوي على أمر تنفيذي (مثل إضافة متابعة، تحديث حالة، تعيين مسؤول، فحص مشكلة)، أرفق مقترحاً صريحاً للخطوة التالية.`;
-
-  try {
-    if (process.env.GEMINI_API_KEY) {
-      const ai = getGenAI();
-      const response = await ai.models.generateContent({
-        model: "gemini-3.6-flash",
-        contents: prompt,
-        config: {
-          temperature: 0.25,
-        },
-      });
-      return res.json({ success: true, reply: response.text || "جاهز لمساعدتك دائماً." });
-    }
-  } catch (error: any) {
-    console.warn("Gemini Chat failed, using smart fallback:", error?.message);
-  }
-
-  let fallbackReply = "أهلاً بك. أنا المساعد الذكي لنظام PVC NESTA AI.";
+  // 1. Prepare contextual fallback first
+  let reply = "أهلاً بك. أنا المساعد التشغيلي لنظام PVC NESTA AI.";
   const q = message.toLowerCase();
+  
   if (q.includes("اليوم") || q.includes("متابعة") || q.includes("مهام")) {
-    fallbackReply = `لديك اليوم ${context?.todayFollowupsCount || 0} متابعة مجدولة، و ${context?.overdueFollowupsCount || 0} متابعة متأخرة تحتاج لحسم فوري.`;
+    reply = `لديك اليوم ${context?.todayFollowupsCount || 0} متابعة مجدولة، و ${context?.overdueFollowupsCount || 0} متابعة متأخرة تحتاج لحسم فوري.`;
   } else if (q.includes("مبيعات") || q.includes("تارجت") || q.includes("هدف")) {
     const achievePercent = context?.monthlyTargetTotal
       ? Math.round(((context.monthlySalesTotal || 0) / context.monthlyTargetTotal) * 100)
       : 0;
-    fallbackReply = `حققت هذا الشهر ${Number(context?.monthlySalesTotal || 0).toLocaleString()} ج.م من أصل ${Number(context?.monthlyTargetTotal || 0).toLocaleString()} ج.م بنسبة إنجاز ${achievePercent}%.`;
-  } else if (q.includes("حارس") || q.includes("فحص") || q.includes("مشاكل") || q.includes("سلامة")) {
-    fallbackReply = `تقرير الحارس الذكي (Guardian): النظام يعمل بكفاءة، مع وجود ${context?.openAlertsCount || 0} تنبيهات تشغيلية و ${context?.openIncidentsCount || 0} مشكلات بحاجة للمراجعة.`;
-  } else {
-    fallbackReply = `جاهز لمساعدتك في الاستفسار، فحص البيانات (CHECK)، أو تنفيذ الإجراءات الميدانية (ACT).`;
+    reply = `حققت هذا الشهر ${Number(context?.monthlySalesTotal || 0).toLocaleString()} ج.م من أصل ${Number(context?.monthlyTargetTotal || 0).toLocaleString()} ج.م بنسبة إنجاز ${achievePercent}%.`;
+  } else if (q.includes("حارس") || q.includes("فحص") || q.includes("مشاكل") || q.includes("سلامة") || q.includes("جارد") || q.includes("guardian")) {
+    reply = `تقرير الحارس الذكي (Guardian): النظام يعمل بكفاءة، مع وجود ${context?.openAlertsCount || 0} تنبيهات تشغيلية و ${context?.openIncidentsCount || 0} مشكلات بحاجة للمراجعة.`;
+  } else if (q.includes("عميل") && context?.selectedCustomer) {
+    const c = context.selectedCustomer;
+    reply = `العميل ${c.name} في منطقة ${c.area || "غير محددة"}، حالته الحالية ${c.stage} ودرجة الاهتمام ${c.interestLevel}.`;
   }
 
-  return res.json({ success: true, reply: fallbackReply });
+  // 2. Only use Gemini if enabled and contextually complex
+  if (isPremiumEnabled && process.env.GEMINI_API_KEY && (message.length > 50 || q.includes("حلل") || q.includes("اقترح"))) {
+    try {
+      const ai = getGenAI();
+      const prompt = `أنت "NESTA AI" - الوكيل الذكي الشامل والمستشار التشغيلي لمنظومة إدارة مبيعات وعمليات شركات UPVC والألومنيوم في مصر.
+النمط الحالي: ${mode.toUpperCase()}
+سياق البيانات: ${JSON.stringify(context || {})}
+طلب المستخدم: """${message}"""
+أجب باللغة العربية بالعامية المصرية الراقية والعملية الفعالة. اعتمد على البيانات الحقيقية.`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.6-flash",
+        contents: prompt,
+        config: { temperature: 0.25 },
+      });
+      return res.json({ success: true, reply: response.text || reply });
+    } catch (error: any) {
+      console.warn("Gemini Chat failed, using heuristic reply:", error?.message);
+    }
+  }
+
+  return res.json({ success: true, reply });
 });
 
 export const updateLeadsStatusDeclaration = {
@@ -327,65 +306,83 @@ export const createFollowupDeclaration = {
 };
 
 app.post("/api/gemini/execute-command", async (req, res) => {
-  const { userMessage, context } = req.body;
+  const { userMessage, context, enablePremiumAi } = req.body;
+
+  const isPremiumEnabled = enablePremiumAi === true && process.env.ENABLE_PREMIUM_AI === "true";
 
   try {
-    if (!process.env.GEMINI_API_KEY) {
+    // 1. Try deterministic parsing first
+    const localCommand = parseOperationalCommand(userMessage);
+    if (localCommand) {
+      const message = localCommand.action === "UPDATE_LEADS_STATUS" 
+        ? `تم التعرف على أمر التحديث: تحويل عملاء ${localCommand.company_name} إلى حالة ${localCommand.new_status}.`
+        : `تم التعرف على أمر الجدولة: متابعة لـ ${localCommand.customer_name} بتاريخ ${localCommand.due_date}.`;
+        
       return res.json({
         success: true,
-        isCommand: false,
-        message: "تم استقبال الأمر بنجاح (وضع المعالجة الذاتية للنظام)."
+        isCommand: true,
+        command: localCommand,
+        message
       });
     }
-    const ai = getGenAI();
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.6-flash",
-      contents: `سياق النظام: ${JSON.stringify(context || {})} \n أمر المستخدم: ${userMessage}`,
-      config: {
-        tools: [{ functionDeclarations: [updateLeadsStatusDeclaration as any, createFollowupDeclaration as any] }],
-        systemInstruction: "أنت المساعد التنفيذي لنظام PVC NESTA AI. حلل طلب المستخدم واستدع الدالة المناسبة إذا كان طلباً تشغيلياً للتحديث أو الجدولة."
+    // 2. Fallback to Gemini only if enabled
+    if (isPremiumEnabled && process.env.GEMINI_API_KEY) {
+      const ai = getGenAI();
+      const response = await ai.models.generateContent({
+        model: "gemini-3.6-flash",
+        contents: `سياق النظام: ${JSON.stringify(context || {})} \n أمر المستخدم: ${userMessage}`,
+        config: {
+          tools: [{ functionDeclarations: [updateLeadsStatusDeclaration as any, createFollowupDeclaration as any] }],
+          systemInstruction: "أنت المساعد التنفيذي لنظام PVC NESTA AI. حلل طلب المستخدم واستدع الدالة المناسبة إذا كان طلباً تشغيلياً للتحديث أو الجدولة."
+        }
+      });
+
+      if (response.functionCalls && response.functionCalls.length > 0) {
+        const call = response.functionCalls[0];
+
+        if (call.name === "update_leads_status_by_filter") {
+          const { company_name, new_status } = call.args as any;
+          return res.json({
+            success: true,
+            isCommand: true,
+            command: {
+              action: "UPDATE_LEADS_STATUS",
+              company_name,
+              new_status
+            },
+            message: `تم تجهيز أمر التحديث الذكي: تحويل عملاء ${company_name} إلى حالة ${new_status}.`
+          });
+        }
+
+        if (call.name === "create_scheduled_followup") {
+          const { customer_name, due_date, title, priority } = call.args as any;
+          return res.json({
+            success: true,
+            isCommand: true,
+            command: {
+              action: "CREATE_FOLLOWUP",
+              customer_name,
+              due_date,
+              title,
+              priority: priority || "medium"
+            },
+            message: `تم تجهيز أمر الجدولة الذكي لـ ${customer_name} بتاريخ ${due_date}.`
+          });
+        }
       }
-    });
 
-    if (response.functionCalls && response.functionCalls.length > 0) {
-      const call = response.functionCalls[0];
-
-      if (call.name === "update_leads_status_by_filter") {
-        const { company_name, new_status } = call.args as any;
-        return res.json({
-          success: true,
-          isCommand: true,
-          command: {
-            action: "UPDATE_LEADS_STATUS",
-            company_name,
-            new_status
-          },
-          message: `تم تجهيز أمر التحديث: تحويل عملاء ${company_name} إلى حالة ${new_status}.`
-        });
-      }
-
-      if (call.name === "create_scheduled_followup") {
-        const { customer_name, due_date, title, priority } = call.args as any;
-        return res.json({
-          success: true,
-          isCommand: true,
-          command: {
-            action: "CREATE_FOLLOWUP",
-            customer_name,
-            due_date,
-            title,
-            priority: priority || "medium"
-          },
-          message: `تم تجهيز أمر جدولة المتابعة لـ ${customer_name} بتاريخ ${due_date}.`
-        });
-      }
+      return res.json({ success: true, isCommand: false, message: response.text });
     }
 
-    return res.json({ success: true, isCommand: false, message: response.text });
+    return res.json({ 
+      success: true, 
+      isCommand: false, 
+      message: "لم أستطع فهم الأمر التشغيلي بدقة. يرجى استخدام صياغة مثل: 'حول عملاء [شركة] إلى [حالة]' أو 'كلم [اسم] بكره بخصوص [موضوع]'" 
+    });
   } catch (error: any) {
-    console.error("Function Calling Error:", error?.message);
-    return res.status(500).json({ error: "حدث خطأ أثناء معالجة الأمر الذكي." });
+    console.error("Operational Command Error:", error?.message);
+    return res.status(500).json({ error: "حدث خطأ أثناء معالجة الأمر." });
   }
 });
 

@@ -68,6 +68,7 @@ export const NestaAssistantDrawer: React.FC = () => {
     monthlyAchievementRate,
     isAiEmergencyStopEnabled,
     toggleAiEmergencyStop,
+    isPremiumAiEnabled,
     guardianHealthReport,
     runGuardianFullCheck,
     executeVerifiedAiAction,
@@ -233,6 +234,7 @@ export const NestaAssistantDrawer: React.FC = () => {
             message: q,
             mode: activeM,
             context: contextData,
+            enablePremiumAi: isPremiumAiEnabled,
           }),
         });
 
