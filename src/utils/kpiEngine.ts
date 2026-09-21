@@ -139,26 +139,45 @@ export function filterByCompany<T extends { companyId?: string }>(
 export function filterEntityCollection<T>(
   items: T[],
   entityType: string,
-  companyId?: string | null,
+  companyId?: string | string[] | null,
   periodOptions?: PeriodFilterOptions,
   snapshot?: KPIEngineDataSnapshot
 ): T[] {
   let result = items;
-  if (companyId && companyId !== "all") {
-    result = result.filter((item: any) => {
-      let itemCompId = item.companyId;
-      if ((!itemCompId || itemCompId === "all") && snapshot) {
-        if (item.customerId) {
-          const cust = snapshot.customers.find((c) => c.id === item.customerId || c.name === item.customerName);
-          if (cust?.companyId) itemCompId = cust.companyId;
-        }
-        if ((!itemCompId || itemCompId === "all") && item.contractId) {
-          const ctr = snapshot.contracts.find((c) => c.id === item.contractId);
-          if (ctr?.companyId) itemCompId = ctr.companyId;
-        }
+  if (companyId) {
+    if (Array.isArray(companyId)) {
+      if (companyId.length > 0 && !companyId.includes("all")) {
+        result = result.filter((item: any) => {
+          let itemCompId = item.companyId;
+          if ((!itemCompId || itemCompId === "all") && snapshot) {
+            if (item.customerId) {
+              const cust = snapshot.customers.find((c) => c.id === item.customerId || c.name === item.customerName);
+              if (cust?.companyId) itemCompId = cust.companyId;
+            }
+            if ((!itemCompId || itemCompId === "all") && item.contractId) {
+              const ctr = snapshot.contracts.find((c) => c.id === item.contractId);
+              if (ctr?.companyId) itemCompId = ctr.companyId;
+            }
+          }
+          return !itemCompId || itemCompId === "all" || companyId.includes(itemCompId);
+        });
       }
-      return !itemCompId || itemCompId === "all" || itemCompId === companyId;
-    });
+    } else if (companyId !== "all") {
+      result = result.filter((item: any) => {
+        let itemCompId = item.companyId;
+        if ((!itemCompId || itemCompId === "all") && snapshot) {
+          if (item.customerId) {
+            const cust = snapshot.customers.find((c) => c.id === item.customerId || c.name === item.customerName);
+            if (cust?.companyId) itemCompId = cust.companyId;
+          }
+          if ((!itemCompId || itemCompId === "all") && item.contractId) {
+            const ctr = snapshot.contracts.find((c) => c.id === item.contractId);
+            if (ctr?.companyId) itemCompId = ctr.companyId;
+          }
+        }
+        return !itemCompId || itemCompId === "all" || itemCompId === companyId;
+      });
+    }
   }
   if (periodOptions) {
     result = result.filter((item: any) => {
@@ -289,7 +308,7 @@ export function getCustomer360Relations(
   const totalContractsValue = customerContracts.reduce((acc, c) => acc + (c.totalValue || 0), 0);
   const totalSalesValue = customerSales.reduce((acc, s) => acc + (s.amount || 0), 0);
   const totalCollectedValue = customerPayments.reduce(
-    (acc, p) => acc + (p.amount || 0),
+    (acc, p) => p.status === "reversed" || p.status === "refunded" ? acc : acc + (p.amount || 0),
     customerContracts.reduce((acc, c) => acc + (c.paidAmount || 0), 0) > 0 && customerPayments.length === 0
       ? customerContracts.reduce((acc, c) => acc + (c.paidAmount || 0), 0)
       : 0
@@ -470,14 +489,35 @@ export function computeUnifiedKPIs(
   const directSalesCount = periodSales.length - linkedSalesCount;
   const avgDealSize = periodSales.length > 0 ? Math.round(salesTotalAmount / periodSales.length) : 0;
 
-  // 3. Collections KPIs
-  let collectionsTotalAmount = periodPayments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
-  if (collectionsTotalAmount === 0 && periodContracts.length > 0) {
-    const fallbackPaid = periodContracts.reduce((sum, c) => sum + (Number(c.paidAmount) || 0), 0);
-    if (fallbackPaid > 0) {
-      collectionsTotalAmount = fallbackPaid;
+  // 3. Collections KPIs (Source of truth: Valid Payment records, with legacy contract.paidAmount fallback only when 0 payment records exist)
+  const paymentsByContract = new Map<string, number>();
+  let directPaymentsSum = 0;
+
+  periodPayments.forEach((p) => {
+    if (p.status === "reversed" || p.status === "refunded") return; // Exclude reversed and refunded from collections totals
+    const amt = Number(p.amount) || 0;
+    if (p.contractId) {
+      paymentsByContract.set(p.contractId, (paymentsByContract.get(p.contractId) || 0) + amt);
+    } else {
+      directPaymentsSum += amt;
     }
-  }
+  });
+
+  let contractCollectionsSum = 0;
+  periodContracts.forEach((c) => {
+    if (paymentsByContract.has(c.id)) {
+      // Contract has actual Payment records -> Payments are the exclusive source of truth
+      contractCollectionsSum += paymentsByContract.get(c.id)!;
+    } else {
+      // Legacy historical fallback ONLY when no Payment records exist for this contract
+      const legacyPaid = Number(c.paidAmount) || 0;
+      if (legacyPaid > 0) {
+        contractCollectionsSum += legacyPaid;
+      }
+    }
+  });
+
+  const collectionsTotalAmount = contractCollectionsSum + directPaymentsSum;
 
   // 4. Quotations KPIs
   const quotationsTotalAmount = periodQuotations.reduce((sum, q) => sum + (Number(q.totalAmount) || 0), 0);

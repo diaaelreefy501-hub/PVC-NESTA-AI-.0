@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
@@ -71,6 +72,22 @@ function getGenAI(): GoogleGenAI {
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", app: "PVC NESTA AI" });
+});
+
+let latestClientDiagnostic: any = null;
+
+app.post("/api/client-diagnostic", (req, res) => {
+  latestClientDiagnostic = req.body;
+  try {
+    fs.writeFileSync("/tmp/client-diagnostic.json", JSON.stringify(req.body, null, 2));
+  } catch (e) {
+    console.error("Error saving diagnostic:", e);
+  }
+  res.json({ status: "received", timestamp: new Date().toISOString() });
+});
+
+app.get("/api/client-diagnostic", (_req, res) => {
+  res.json(latestClientDiagnostic || { status: "none" });
 });
 
 app.post("/api/gemini/intake", async (req, res) => {

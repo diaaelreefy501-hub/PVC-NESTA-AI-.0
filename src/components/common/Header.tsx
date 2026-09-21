@@ -54,11 +54,16 @@ export const Header: React.FC = () => {
     currentUser,
     syncData,
     setIsHealthCenterOpen,
+    selectedCompanyIds,
+    toggleCompanySelection,
+    selectAllCompanies,
+    clearAllCompanySelection,
     guardianHealthReport,
     theme,
     setTheme,
   } = useApp();
 
+  const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = useState(false);
   const [isSearchDropdownOpen, setIsSearchDropdownOpen] = useState(false);
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -235,23 +240,107 @@ export const Header: React.FC = () => {
             )}
           </div>
 
-          {/* Company Switcher */}
-          <div className="relative flex items-center bg-[#202225] p-0.5 sm:p-1 rounded-xl border border-[#292B2E] max-w-[110px] sm:max-w-[180px]">
-            {activeCompany && activeCompany.logoUrl && (
-              <img src={activeCompany.logoUrl} alt="Logo" className="w-5 h-5 rounded-md object-contain shrink-0 ml-1 hidden sm:block" />
-            )}
-            <select
-              value={activeCompanyId}
-              onChange={(e) => setActiveCompanyId(e.target.value)}
-              className="bg-transparent text-[#EDEDED] font-bold text-[10px] sm:text-xs px-1 py-1 sm:py-1.5 border-0 focus:ring-0 outline-hidden cursor-pointer w-full truncate"
+          {/* Multi-Company Switcher */}
+          <div className="relative">
+            <button
+              id="header-company-switcher-btn"
+              onClick={() => setIsCompanyDropdownOpen(!isCompanyDropdownOpen)}
+              className="flex items-center gap-1.5 bg-[#202225] hover:bg-[#272A2D] text-[#EDEDED] font-bold text-[10px] sm:text-xs px-2.5 py-1.5 rounded-xl border border-[#292B2E] transition-colors cursor-pointer"
+              title="تحديد الشركات للعمل الموحد"
             >
-              <option value="all" className="bg-[#202225] text-[#EDEDED]">🌐 الكل ({companies.length})</option>
-              {companies.map((c) => (
-                <option key={c.id} value={c.id} className="bg-[#202225] text-[#EDEDED]">
-                  🏢 {c.name}
-                </option>
-              ))}
-            </select>
+              {activeCompany && activeCompany.logoUrl ? (
+                <img src={activeCompany.logoUrl} alt="Logo" className="w-4 h-4 rounded-md object-contain shrink-0 hidden sm:block" />
+              ) : (
+                <Building2 className="w-3.5 h-3.5 text-sky-400 shrink-0 hidden sm:block" />
+              )}
+              <span className="max-w-[85px] sm:max-w-[130px] truncate">
+                {selectedCompanyIds.length === 0 || selectedCompanyIds.includes("all")
+                  ? `🌐 كافة الشركات (${companies.length})`
+                  : selectedCompanyIds.length === 1
+                  ? `🏢 ${companies.find(c => c.id === selectedCompanyIds[0])?.name || "شركة"}`
+                  : `🏢 ${selectedCompanyIds.length} شركات`}
+              </span>
+              <ChevronDown className={`w-3 h-3 text-[#A1A1AA] transition-transform ${isCompanyDropdownOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {isCompanyDropdownOpen && (
+              <div 
+                className="absolute left-0 sm:left-auto sm:right-0 mt-2 w-64 bg-[#18191B] rounded-2xl shadow-2xl border border-[#292B2E] p-3 z-50 animate-in fade-in zoom-in-95 duration-100 space-y-2.5"
+              >
+                <div className="flex items-center justify-between pb-2 border-b border-[#292B2E]">
+                  <span className="text-xs font-bold text-[#EDEDED] flex items-center gap-1.5">
+                    <Building2 className="w-3.5 h-3.5 text-sky-400" />
+                    تحديد الشركات المعروضة
+                  </span>
+                  <button 
+                    onClick={() => setIsCompanyDropdownOpen(false)}
+                    className="text-[#71717A] hover:text-[#EDEDED] p-1 rounded-lg cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between gap-2 px-1">
+                  <button
+                    onClick={() => {
+                      selectAllCompanies();
+                    }}
+                    className="text-[11px] text-sky-400 hover:text-sky-300 font-medium cursor-pointer"
+                  >
+                    تحديد الكل
+                  </button>
+                  <button
+                    onClick={() => {
+                      clearAllCompanySelection();
+                    }}
+                    className="text-[11px] text-[#A1A1AA] hover:text-white font-medium cursor-pointer"
+                  >
+                    عرض الكل (عام)
+                  </button>
+                </div>
+
+                <div className="max-h-56 overflow-y-auto space-y-1.5 custom-scrollbar pr-0.5">
+                  {companies.map((c) => {
+                    const isExplicitlySelected = selectedCompanyIds.includes(c.id);
+                    const isAll = selectedCompanyIds.length === 0 || selectedCompanyIds.includes("all");
+                    return (
+                      <div
+                        key={c.id}
+                        onClick={() => toggleCompanySelection(c.id)}
+                        className={`flex items-center justify-between p-2 rounded-xl text-xs font-semibold cursor-pointer border transition-all ${
+                          isExplicitlySelected
+                            ? "bg-sky-500/15 text-sky-200 border-sky-500/30"
+                            : isAll
+                            ? "bg-[#202225] text-[#EDEDED] border-[#292B2E] hover:border-[#383B40]"
+                            : "bg-[#1D1F21] text-[#A1A1AA] border-transparent hover:bg-[#202225]"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 truncate">
+                          <span
+                            className="w-2.5 h-2.5 rounded-full shrink-0"
+                            style={{ backgroundColor: c.color || "#38bdf8" }}
+                          />
+                          <span className="truncate">{c.name}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {isExplicitlySelected ? (
+                            <span className="w-4 h-4 rounded bg-sky-500 text-white flex items-center justify-center text-[10px] font-bold">
+                              ✓
+                            </span>
+                          ) : isAll ? (
+                            <span className="w-4 h-4 rounded border border-sky-400/40 text-sky-400 flex items-center justify-center text-[9px] font-bold">
+                              ✓
+                            </span>
+                          ) : (
+                            <span className="w-4 h-4 rounded border border-[#3E4247]" />
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Today Tasks / Notifications Bell with Dropdown */}

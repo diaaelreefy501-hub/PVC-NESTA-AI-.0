@@ -666,3 +666,416 @@ CREATE POLICY "Follow_ups delete policy" ON public.follow_ups
     AND public.get_user_role(auth.uid()) IN ('owner', 'admin') 
     AND public.has_company_access(auth.uid(), "companyId")
   );
+
+-- -----------------------------------------------------------------------------
+-- 16. OPPORTUNITIES Table Policies
+-- -----------------------------------------------------------------------------
+ALTER TABLE public.opportunities ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Opportunities select policy" ON public.opportunities;
+CREATE POLICY "Opportunities select policy" ON public.opportunities
+  FOR SELECT TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Opportunities insert policy" ON public.opportunities;
+CREATE POLICY "Opportunities insert policy" ON public.opportunities
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    public.is_active_user(auth.uid()) 
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Opportunities update policy" ON public.opportunities;
+CREATE POLICY "Opportunities update policy" ON public.opportunities
+  FOR UPDATE TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.has_company_access(auth.uid(), "companyId")
+  )
+  WITH CHECK (
+    public.is_active_user(auth.uid()) 
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Opportunities delete policy" ON public.opportunities;
+CREATE POLICY "Opportunities delete policy" ON public.opportunities
+  FOR DELETE TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin') 
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+-- -----------------------------------------------------------------------------
+-- 17. EMPLOYEES Table Policies
+-- -----------------------------------------------------------------------------
+ALTER TABLE public.employees ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Employees select policy" ON public.employees;
+CREATE POLICY "Employees select policy" ON public.employees
+  FOR SELECT TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Employees insert policy" ON public.employees;
+CREATE POLICY "Employees insert policy" ON public.employees
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin', 'manager')
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Employees update policy" ON public.employees;
+CREATE POLICY "Employees update policy" ON public.employees
+  FOR UPDATE TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin', 'manager')
+    AND public.has_company_access(auth.uid(), "companyId")
+  )
+  WITH CHECK (
+    public.is_active_user(auth.uid()) 
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Employees delete policy" ON public.employees;
+CREATE POLICY "Employees delete policy" ON public.employees
+  FOR DELETE TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin') 
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+-- -----------------------------------------------------------------------------
+-- 18. SALARY HISTORY Table Policies
+-- -----------------------------------------------------------------------------
+ALTER TABLE public.salary_history ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Salary_history select policy" ON public.salary_history;
+CREATE POLICY "Salary_history select policy" ON public.salary_history
+  FOR SELECT TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Salary_history insert policy" ON public.salary_history;
+CREATE POLICY "Salary_history insert policy" ON public.salary_history
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin')
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Salary_history update policy" ON public.salary_history;
+CREATE POLICY "Salary_history update policy" ON public.salary_history
+  FOR UPDATE TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin')
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Salary_history delete policy" ON public.salary_history;
+CREATE POLICY "Salary_history delete policy" ON public.salary_history
+  FOR DELETE TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin') 
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+-- -----------------------------------------------------------------------------
+-- 19. SALARY PAYMENTS Table Policies
+-- -----------------------------------------------------------------------------
+ALTER TABLE public.salary_payments ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Salary_payments select policy" ON public.salary_payments;
+CREATE POLICY "Salary_payments select policy" ON public.salary_payments
+  FOR SELECT TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Salary_payments insert policy" ON public.salary_payments;
+CREATE POLICY "Salary_payments insert policy" ON public.salary_payments
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin')
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Salary_payments update policy" ON public.salary_payments;
+CREATE POLICY "Salary_payments update policy" ON public.salary_payments
+  FOR UPDATE TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin')
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Salary_payments delete policy" ON public.salary_payments;
+CREATE POLICY "Salary_payments delete policy" ON public.salary_payments
+  FOR DELETE TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin') 
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+-- -----------------------------------------------------------------------------
+-- 20. COMMISSION RULES Table Policies
+-- -----------------------------------------------------------------------------
+ALTER TABLE public.commission_rules ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Commission_rules select policy" ON public.commission_rules;
+CREATE POLICY "Commission_rules select policy" ON public.commission_rules
+  FOR SELECT TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Commission_rules insert policy" ON public.commission_rules;
+CREATE POLICY "Commission_rules insert policy" ON public.commission_rules
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin')
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Commission_rules update policy" ON public.commission_rules;
+CREATE POLICY "Commission_rules update policy" ON public.commission_rules
+  FOR UPDATE TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin')
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Commission_rules delete policy" ON public.commission_rules;
+CREATE POLICY "Commission_rules delete policy" ON public.commission_rules
+  FOR DELETE TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin') 
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+-- -----------------------------------------------------------------------------
+-- 21. COMMISSION PAYMENTS Table Policies
+-- -----------------------------------------------------------------------------
+ALTER TABLE public.commission_payments ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Commission_payments select policy" ON public.commission_payments;
+CREATE POLICY "Commission_payments select policy" ON public.commission_payments
+  FOR SELECT TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Commission_payments insert policy" ON public.commission_payments;
+CREATE POLICY "Commission_payments insert policy" ON public.commission_payments
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin')
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Commission_payments update policy" ON public.commission_payments;
+CREATE POLICY "Commission_payments update policy" ON public.commission_payments
+  FOR UPDATE TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin')
+    AND public.has_company_access(auth.uid(), "companyId")
+  )
+  WITH CHECK (
+    public.is_active_user(auth.uid()) 
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Commission_payments delete policy" ON public.commission_payments;
+CREATE POLICY "Commission_payments delete policy" ON public.commission_payments
+  FOR DELETE TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin') 
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+-- -----------------------------------------------------------------------------
+-- 22. ADVERTISING BUDGETS Table Policies
+-- -----------------------------------------------------------------------------
+ALTER TABLE public.advertising_budgets ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Ad_budgets select policy" ON public.advertising_budgets;
+CREATE POLICY "Ad_budgets select policy" ON public.advertising_budgets
+  FOR SELECT TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Ad_budgets insert policy" ON public.advertising_budgets;
+CREATE POLICY "Ad_budgets insert policy" ON public.advertising_budgets
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin')
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Ad_budgets update policy" ON public.advertising_budgets;
+CREATE POLICY "Ad_budgets update policy" ON public.advertising_budgets
+  FOR UPDATE TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin')
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Ad_budgets delete policy" ON public.advertising_budgets;
+CREATE POLICY "Ad_budgets delete policy" ON public.advertising_budgets
+  FOR DELETE TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin') 
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+-- -----------------------------------------------------------------------------
+-- 23. AD SPEND Table Policies
+-- -----------------------------------------------------------------------------
+ALTER TABLE public.ad_spend ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Ad_spend select policy" ON public.ad_spend;
+CREATE POLICY "Ad_spend select policy" ON public.ad_spend
+  FOR SELECT TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Ad_spend insert policy" ON public.ad_spend;
+CREATE POLICY "Ad_spend insert policy" ON public.ad_spend
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin', 'manager')
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Ad_spend update policy" ON public.ad_spend;
+CREATE POLICY "Ad_spend update policy" ON public.ad_spend
+  FOR UPDATE TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin')
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Ad_spend delete policy" ON public.ad_spend;
+CREATE POLICY "Ad_spend delete policy" ON public.ad_spend
+  FOR DELETE TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin') 
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+-- -----------------------------------------------------------------------------
+-- 24. OWNER FINANCIAL RULES Table Policies
+-- -----------------------------------------------------------------------------
+ALTER TABLE public.owner_financial_rules ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Owner_rules select policy" ON public.owner_financial_rules;
+CREATE POLICY "Owner_rules select policy" ON public.owner_financial_rules
+  FOR SELECT TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin')
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Owner_rules insert policy" ON public.owner_financial_rules;
+CREATE POLICY "Owner_rules insert policy" ON public.owner_financial_rules
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) = 'owner'
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Owner_rules update policy" ON public.owner_financial_rules;
+CREATE POLICY "Owner_rules update policy" ON public.owner_financial_rules
+  FOR UPDATE TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) = 'owner'
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Owner_rules delete policy" ON public.owner_financial_rules;
+CREATE POLICY "Owner_rules delete policy" ON public.owner_financial_rules
+  FOR DELETE TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) = 'owner'
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+-- -----------------------------------------------------------------------------
+-- 25. OWNER PAYMENTS Table Policies
+-- -----------------------------------------------------------------------------
+ALTER TABLE public.owner_payments ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Owner_payments select policy" ON public.owner_payments;
+CREATE POLICY "Owner_payments select policy" ON public.owner_payments
+  FOR SELECT TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) IN ('owner', 'admin')
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Owner_payments insert policy" ON public.owner_payments;
+CREATE POLICY "Owner_payments insert policy" ON public.owner_payments
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) = 'owner'
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Owner_payments update policy" ON public.owner_payments;
+CREATE POLICY "Owner_payments update policy" ON public.owner_payments
+  FOR UPDATE TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) = 'owner'
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+
+DROP POLICY IF EXISTS "Owner_payments delete policy" ON public.owner_payments;
+CREATE POLICY "Owner_payments delete policy" ON public.owner_payments
+  FOR DELETE TO authenticated
+  USING (
+    public.is_active_user(auth.uid()) 
+    AND public.get_user_role(auth.uid()) = 'owner'
+    AND public.has_company_access(auth.uid(), "companyId")
+  );
+

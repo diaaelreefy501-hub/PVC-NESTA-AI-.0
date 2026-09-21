@@ -1,6 +1,7 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { useApp } from "../../context/AppContext";
 import { NavigationTab } from "../../types";
+import { canAccessTab } from "../../utils/rbac";
 import {
   LayoutDashboard,
   CalendarDays,
@@ -25,6 +26,7 @@ import {
   Target,
   Package,
   ShieldAlert,
+  FileText,
 } from "lucide-react";
 
 interface NavGroup {
@@ -53,6 +55,7 @@ export const Sidebar: React.FC = () => {
     isSidebarCollapsed,
     setIsSidebarCollapsed,
     currentUser,
+    currentCompanyRole,
   } = useApp();
 
   const totalOverdue = overdueFollowUps.length;
@@ -136,12 +139,22 @@ export const Sidebar: React.FC = () => {
       ],
     },
     {
-      title: "التشغيل والمال",
+      title: "المالية والتقارير",
       items: [
         {
           id: "collections",
           label: "التنفيذ والتحصيل",
           icon: Receipt,
+        },
+        {
+          id: "finance",
+          label: "الإدارة المالية والعمولات",
+          icon: DollarSign,
+        },
+        {
+          id: "reports",
+          label: "مركز التقارير الموحد",
+          icon: FileText,
         },
         {
           id: "review",
@@ -204,7 +217,14 @@ export const Sidebar: React.FC = () => {
     },
   ];
 
-  const navGroups = allNavGroups;
+  const navGroups = useMemo(() => {
+    return allNavGroups
+      .map((group) => ({
+        ...group,
+        items: group.items.filter((item) => canAccessTab(item.id, currentUser, currentCompanyRole)),
+      }))
+      .filter((group) => group.items.length > 0);
+  }, [allNavGroups, currentUser, currentCompanyRole]);
 
 
   return (

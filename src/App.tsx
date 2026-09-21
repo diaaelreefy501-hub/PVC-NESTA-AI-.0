@@ -10,8 +10,9 @@ import { NestaAssistantDrawer } from "./components/ai/NestaAssistantDrawer";
 import { HealthCenterModal } from "./components/ai/HealthCenterModal";
 import { DataLineageModal } from "./components/ai/DataLineageModal";
 import { SmartAiIntake } from "./components/ai/SmartAiIntake";
-import { CheckCircle2, AlertCircle, Info, Loader2 } from "lucide-react";
+import { CheckCircle2, AlertCircle, Info, Loader2, ShieldAlert } from "lucide-react";
 import { supabase } from "./integrations/supabase/client";
+import { canAccessTab } from "./utils/rbac";
 
 // Views
 import { LoginView } from "./components/auth/LoginView";
@@ -34,11 +35,40 @@ import { ExcelImportView } from "./components/import/ExcelImportView";
 import { ProductsView } from "./components/products/ProductsView";
 import { TasksView } from "./components/tasks/TasksView";
 import { DataReviewCenter } from "./components/DataReviewCenter";
+import { FinanceView } from "./components/finance/FinanceView";
+import { ReportsView } from "./components/reports/ReportsView";
 
 const MainContent: React.FC = () => {
-  const { currentTab, isIntakeModalOpen, setIsIntakeModalOpen, toast } = useApp();
+  const { currentTab, setCurrentTab, isIntakeModalOpen, setIsIntakeModalOpen, toast, currentUser, currentCompanyRole } = useApp();
+
+  // Redirect if unauthorized tab is opened
+  useEffect(() => {
+    if (currentUser && !canAccessTab(currentTab, currentUser, currentCompanyRole)) {
+      setCurrentTab("dashboard");
+    }
+  }, [currentTab, currentUser, currentCompanyRole, setCurrentTab]);
 
   const renderActiveView = () => {
+    if (currentUser && !canAccessTab(currentTab, currentUser, currentCompanyRole)) {
+      return (
+        <div className="flex flex-col items-center justify-center min-h-[60vh] text-center p-6 space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-red-950/40 border border-red-800/50 flex items-center justify-center text-red-400">
+            <ShieldAlert className="w-8 h-8" />
+          </div>
+          <h2 className="text-xl font-bold text-[#EDEDED]">غير مصرح بالوصول</h2>
+          <p className="text-sm text-[#A1A1AA] max-w-md">
+            عذراً، هذه الصفحة مخصصة لمديري الشركات ومالك النظام فقط ولا تملك الصلاحية الكافية لفتحها.
+          </p>
+          <button
+            onClick={() => setCurrentTab("dashboard")}
+            className="px-5 py-2.5 bg-[#C8A75A] text-black font-bold rounded-xl hover:bg-[#D4AF37] transition-all cursor-pointer shadow-lg"
+          >
+            العودة للرئيسية
+          </button>
+        </div>
+      );
+    }
+
     switch (currentTab) {
       case "today":
         return <MyDayView />;
@@ -64,6 +94,10 @@ const MainContent: React.FC = () => {
         return <SalesView />;
       case "collections":
         return <CollectionsView />;
+      case "finance":
+        return <FinanceView />;
+      case "reports":
+        return <ReportsView />;
       case "performance":
         return <MonthlyPerformanceView />;
       case "opportunities":

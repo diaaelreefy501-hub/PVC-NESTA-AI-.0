@@ -1,6 +1,7 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { useApp } from "../../context/AppContext";
 import { NavigationTab } from "../../types";
+import { canAccessTab } from "../../utils/rbac";
 import {
   LayoutDashboard,
   CalendarDays,
@@ -32,6 +33,8 @@ export const MobileBottomNav: React.FC<{
     todayFollowUps,
     overdueFollowUps,
     setIsIntakeModalOpen,
+    currentUser,
+    currentCompanyRole,
   } = useApp();
 
   const [isActionSheetOpen, setIsActionSheetOpen] = useState(false);
@@ -39,7 +42,7 @@ export const MobileBottomNav: React.FC<{
 
   const totalAlerts = overdueFollowUps.length + todayFollowUps.length;
 
-  const moreTabs: { id: NavigationTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+  const rawMoreTabs: { id: NavigationTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
     { id: "inquiries", label: "الاستفسارات", icon: Sparkles },
     { id: "followups", label: "المتابعات", icon: CalendarDays },
     { id: "tasks", label: "المهام والعمليات", icon: FileCheck2 },
@@ -53,6 +56,10 @@ export const MobileBottomNav: React.FC<{
     { id: "companies", label: "إدارة الشركات", icon: Building2 },
     { id: "settings", label: "الإعدادات والمزامنة", icon: Settings },
   ];
+
+  const moreTabs = useMemo(() => {
+    return rawMoreTabs.filter((tab) => canAccessTab(tab.id, currentUser, currentCompanyRole));
+  }, [rawMoreTabs, currentUser, currentCompanyRole]);
 
   return (
     <>

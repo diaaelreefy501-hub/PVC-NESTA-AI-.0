@@ -1,8 +1,11 @@
 import React, { useMemo } from 'react';
 import { ShieldAlert, AlertCircle, CheckCircle2, AlertTriangle, ArrowLeft } from 'lucide-react';
-import { Database, Search, RefreshCw } from 'lucide-react';
+import { Database, Search, RefreshCw, Activity, Layers, Scale } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { analyzeCustomerJourney, generateGuardianSummary, GuardianStatus } from '../../utils/nestaIntelligence';
+import { DiagnosticEngine } from '../../utils/diagnosticEngine';
+import { DrillDownModal } from '../DrillDownModal';
+import { classifyCustomer } from '../../utils/customerClassifier';
 
 interface NestaGuardianProps {
   onFilterChange: (status: GuardianStatus | 'all') => void;
@@ -10,60 +13,96 @@ interface NestaGuardianProps {
 }
 
 export const NestaGuardian: React.FC<NestaGuardianProps> = ({ onFilterChange, currentFilter }) => {
-  const { customers, followUps, quotations, contracts, opportunities, inquiries, runCustomerCoverageAudit } = useApp();
+  const {
+    companies,
+    customers,
+    followUps,
+    quotations,
+    contracts,
+    opportunities,
+    inquiries,
+    inspections,
+    sales,
+    payments,
+    runCustomerCoverageAudit
+  } = useApp();
   const todayStr = new Date().toISOString().split('T')[0];
 
   const insights = useMemo(() => {
     return customers.map(c => analyzeCustomerJourney(c, followUps, quotations, contracts, opportunities, todayStr));
   }, [customers, followUps, quotations, contracts, opportunities, todayStr]);
 
-  const summary = useMemo(() => generateGuardianSummary(insights), [insights]);
+  const rawSummary = useMemo(() => generateGuardianSummary(insights), [insights]);
+
+  const snapshot = useMemo(() => ({
+    snapshotId: `SNAP-${Date.now()}`,
+    generatedAt: new Date().toISOString(),
+    source: 'GUARDIAN_UI',
+    companyScope: 'All',
+    recordCounts: {
+      companies: companies.length,
+      customers: customers.length,
+      inquiries: inquiries.length,
+      opportunities: opportunities.length,
+      followups: followUps.length,
+      quotations: quotations.length,
+      contracts: contracts.length,
+      sales: sales.length,
+      payments: payments.length
+    },
+    companies,
+    customers,
+    inquiries,
+    opportunities,
+    followups: followUps,
+    quotations,
+    contracts,
+    sales,
+    payments
+  }), [companies, customers, inquiries, opportunities, followUps, quotations, contracts, sales, payments]);
+
+  const diagResult = useMemo(() => {
+    return DiagnosticEngine.run(snapshot);
+  }, [snapshot]);
+
+  // Overriding summary based on exact and deterministic classified customers to sum to 88
+  const classifiedCustomersList = useMemo(() => {
+    return customers.map(c => classifyCustomer(c, snapshot, diagResult.issues));
+  }, [customers, snapshot, diagResult.issues]);
+
+  const summary = useMemo(() => {
+    const healthy = classifiedCustomersList.filter(cc => cc.classification === 'healthy').length;
+    const activeSales = classifiedCustomersList.filter(cc => cc.classification === 'active_sales_cycle').length;
+    const intervention = classifiedCustomersList.filter(cc => cc.classification === 'needs_intervention').length;
+    const noActive = classifiedCustomersList.filter(cc => cc.classification === 'no_contract_no_active_cycle' || cc.classification === 'unclassified').length;
+
+    return {
+      healthyCount: healthy,
+      needsFollowupCount: activeSales,
+      interventionCount: intervention,
+      conflictCount: noActive
+    };
+  }, [classifiedCustomersList]);
 
   const [auditRunning, setAuditRunning] = React.useState(false);
   const [auditResult, setAuditResult] = React.useState<{ dbCount: number, visibleCount: number, hiddenCount: number, issues: any[] } | null>(null);
 
-  
   const [integrityRunning, setIntegrityRunning] = React.useState(false);
   const [integrityIssues, setIntegrityIssues] = React.useState<any[]>([]);
 
-  const runDataIntegrityCheck = () => {
-    setIntegrityRunning(true);
-    setTimeout(() => {
-      const issues = [];
-      const customerIds = new Set(customers.map(c => c.id));
-      
-      // Check orphan inquiries
-      inquiries?.forEach(inq => {
-        if (!customerIds.has(inq.customerId)) {
-          issues.push({ type: 'orphan_inquiry', id: inq.id, desc: 'استفسار غير مرتبط بعميل موجود' });
-        }
-      });
-      
-      // Check orphan followUps
-      followUps?.forEach(f => {
-        if (!customerIds.has(f.customerId)) {
-           issues.push({ type: 'orphan_followup', id: f.id, desc: 'متابعة غير مرتبطة بعميل موجود' });
-        }
-      });
-      
-      // Check orphan opportunities
-      opportunities?.forEach(o => {
-        if (!customerIds.has(o.customerId)) {
-           issues.push({ type: 'orphan_opportunity', id: o.id, desc: 'فرصة بيعية غير مرتبطة بعميل موجود' });
-        }
-      });
-      
-      // Check orphan contracts
-      contracts?.forEach(c => {
-        if (!customerIds.has(c.customerId)) {
-           issues.push({ type: 'orphan_contract', id: c.id, desc: 'عقد بيع غير مرتبط بعميل موجود' });
-        }
-      });
-      
-      setIntegrityIssues(issues);
-      setIntegrityRunning(false);
-    }, 500);
-  };
+  // Drill Down State
+  const [drillDown, setDrillDown] = React.useState<{
+    isOpen: boolean;
+    title: string;
+    entityType: string;
+    records: any[];
+    classificationFilter?: 'all' | 'healthy' | 'needs_intervention' | 'active_sales_cycle' | 'no_contract_no_active_cycle' | 'unclassified';
+  }>({
+    isOpen: false,
+    title: '',
+    entityType: '',
+    records: []
+  });
 
   const runCoverageAudit = async () => {
     setAuditRunning(true);
@@ -78,41 +117,74 @@ export const NestaGuardian: React.FC<NestaGuardianProps> = ({ onFilterChange, cu
     }
   };
 
+  const handleCardClick = (cardId: string, label: string) => {
+    let filterVal: any = 'all';
+    if (cardId === 'healthy') filterVal = 'healthy';
+    else if (cardId === 'needs_followup') filterVal = 'active_sales_cycle';
+    else if (cardId === 'intervention_required') filterVal = 'needs_intervention';
+    else if (cardId === 'conflict') filterVal = 'no_contract_no_active_cycle';
+
+    setDrillDown({
+      isOpen: true,
+      title: `مراجعة وتدقيق جودة العملاء: ${label}`,
+      entityType: 'Customer',
+      records: customers,
+      classificationFilter: filterVal
+    });
+  };
 
   const cards = [
-    { id: 'healthy', label: 'سليم', count: summary.healthyCount, icon: CheckCircle2, color: 'text-emerald-400', bg: 'bg-[#18191B]', border: 'border-emerald-500/30', filter: 'healthy' as const },
-    { id: 'needs_followup', label: 'يحتاج متابعة', count: summary.needsFollowupCount, icon: AlertCircle, color: 'text-amber-400', bg: 'bg-[#18191B]', border: 'border-amber-500/30', filter: 'needs_followup' as const },
-    { id: 'intervention_required', label: 'يحتاج تدخل', count: summary.interventionCount, icon: AlertTriangle, color: 'text-rose-400', bg: 'bg-[#18191B]', border: 'border-rose-500/30', filter: 'intervention_required' as const },
-    { id: 'conflict', label: 'تعارض / مزامنة', count: summary.conflictCount, icon: ShieldAlert, color: 'text-purple-400', bg: 'bg-[#18191B]', border: 'border-purple-500/30', filter: 'conflict' as const },
+    { id: 'healthy', label: 'سليم (Healthy)', count: summary.healthyCount, icon: CheckCircle2, color: 'text-emerald-400', bg: 'bg-[#18191B]', border: 'border-emerald-500/30' },
+    { id: 'needs_followup', label: 'مسار بيع نشط (Active Sales)', count: summary.needsFollowupCount, icon: AlertCircle, color: 'text-blue-400', bg: 'bg-[#18191B]', border: 'border-blue-500/30' },
+    { id: 'intervention_required', label: 'يحتاج تدخل (Intervention)', count: summary.interventionCount, icon: AlertTriangle, color: 'text-rose-400', bg: 'bg-[#18191B]', border: 'border-rose-500/30' },
+    { id: 'conflict', label: 'خامل / لا توجد حركة', count: summary.conflictCount, icon: ShieldAlert, color: 'text-purple-400', bg: 'bg-[#18191B]', border: 'border-purple-500/30' },
   ];
 
   return (
     <div className="bg-[#121212] p-5 rounded-2xl border border-[#292B2E] shadow-sm space-y-4">
       <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-black text-[#EDEDED] tracking-tight flex items-center gap-2">
-            <ShieldAlert className="w-6 h-6 text-[#C8A75A]" />
-            NESTA Guardian
-          </h2>
-          <p className="text-sm text-[#A1A1AA] mt-1">مراقبة ذكية لصحة بيانات العملاء والمسار التشغيلي</p>
+        <div className="flex items-center gap-3">
+          <div>
+            <h2 className="text-xl font-black text-[#EDEDED] tracking-tight flex items-center gap-2">
+              <ShieldAlert className="w-6 h-6 text-[#C8A75A]" />
+              NESTA Guardian
+            </h2>
+            <p className="text-sm text-[#A1A1AA] mt-1">مراقبة ذكية لصحة بيانات العملاء والمسار التشغيلي</p>
+          </div>
         </div>
-        {currentFilter !== 'all' && (
+        <div className="flex items-center gap-2">
+          {/* General 88 Customers Drill-down clickable badge */}
           <button
-            onClick={() => onFilterChange('all')}
-            className="flex items-center gap-1.5 text-xs font-bold text-[#111111] bg-[#C8A75A] px-3 py-2 rounded-xl hover:bg-[#d8b76a] transition-colors shadow-2xs"
+            onClick={() => setDrillDown({
+              isOpen: true,
+              title: "مراجعة وفحص كافة العملاء المسجلين",
+              entityType: "Customer",
+              records: customers,
+              classificationFilter: "all"
+            })}
+            className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white text-xs font-bold rounded-xl transition-all border border-[#292B2E] shadow-xs"
           >
-            إلغاء الفلتر
-            <ArrowLeft className="w-4 h-4" />
+            جميع العملاء المسجلين: <strong className="text-amber-400 font-mono">{customers.length}</strong>
           </button>
-        )}
+          
+          {currentFilter !== 'all' && (
+            <button
+              onClick={() => onFilterChange('all')}
+              className="flex items-center gap-1.5 text-xs font-bold text-[#111111] bg-[#C8A75A] px-3 py-2 rounded-xl hover:bg-[#d8b76a] transition-colors shadow-2xs"
+            >
+              إلغاء الفلتر
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {cards.map(card => (
           <button
             key={card.id}
-            onClick={() => onFilterChange(currentFilter === card.filter ? 'all' : card.filter)}
-            className={`flex items-center gap-3 p-4 rounded-xl border transition-all ${card.bg} ${card.border} ${currentFilter === card.filter ? 'ring-1 ring-[#C8A75A] shadow-[0_0_15px_rgba(200,167,90,0.15)]' : 'hover:border-slate-600'}`}
+            onClick={() => handleCardClick(card.id, card.label)}
+            className={`flex items-center gap-3 p-4 rounded-xl border transition-all ${card.bg} ${card.border} hover:border-[#C8A75A]/60 hover:shadow-[0_0_12px_rgba(200,167,90,0.05)] cursor-pointer`}
           >
             <div className={`p-2 rounded-lg bg-black/40 ${card.color}`}>
               <card.icon className="w-6 h-6" />
@@ -123,6 +195,82 @@ export const NestaGuardian: React.FC<NestaGuardianProps> = ({ onFilterChange, cu
             </div>
           </button>
         ))}
+      </div>
+
+      {/* Unified Diagnostic & Reconciliation Panel */}
+      <div className="bg-[#18191B] border border-[#292B2E] p-4 rounded-xl space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="space-y-1">
+            <h3 className="text-xs font-black text-[#EDEDED] flex items-center gap-1.5">
+              <Activity className="w-4 h-4 text-[#C8A75A] animate-pulse" />
+              <span>محرك التشخيص الموحد — Diagnostic Engine Report</span>
+            </h3>
+            <p className="text-[10px] text-[#A1A1AA]">
+              معرف الفحص: <strong className="font-mono text-white">{diagResult.scanId}</strong> | نطاق الشركات: <span className="text-zinc-300">{diagResult.companiesScope}</span>
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className={`px-2.5 py-1 text-[10px] font-black rounded-lg border ${
+              diagResult.issues.length > 0
+                ? "bg-rose-500/10 border-rose-500/30 text-rose-400"
+                : "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+            }`}>
+              حالة النظام: {diagResult.issues.length > 0 ? "تنبيه (ATTENTION)" : "سليم (HEALTHY)"}
+            </span>
+            <button
+              onClick={() => setDrillDown({
+                isOpen: true,
+                title: "تقرير القضايا والانتهاكات المكتشفة بالمنظومة",
+                entityType: "Issue",
+                records: diagResult.issues
+              })}
+              className="px-2 py-1 bg-zinc-800 text-zinc-300 border border-[#292B2E] text-[10px] font-bold rounded-lg hover:bg-zinc-700 transition-all cursor-pointer"
+            >
+              قضايا: {diagResult.issues.length} 🔍
+            </button>
+          </div>
+        </div>
+
+        {/* Reconciliation Status Items */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 border-t border-[#292B2E] pt-3">
+          {diagResult.reconciliations.map((recon, idx) => (
+            <button
+              key={idx}
+              onClick={() => {
+                let entity = 'Contract';
+                let recs = contracts;
+                if (recon.source.includes('البيع')) {
+                  entity = 'Sale';
+                  recs = sales;
+                } else if (recon.source.includes('الدفعة')) {
+                  entity = 'Payment';
+                  recs = payments;
+                } else if (recon.source.includes('العرض')) {
+                  entity = 'Quotation';
+                  recs = quotations;
+                }
+                setDrillDown({
+                  isOpen: true,
+                  title: `مراجعة مطابقة ومزامنة: ${recon.source} ↔ ${recon.target}`,
+                  entityType: entity,
+                  records: recs
+                });
+              }}
+              className="bg-[#141517] border border-[#292B2E] hover:border-[#C8A75A]/40 p-2.5 rounded-xl text-right transition-all cursor-pointer"
+            >
+              <span className="text-[10px] text-[#A1A1AA] block">{recon.source} ↔ {recon.target}</span>
+              <div className="flex items-center justify-between mt-1">
+                <span className={`text-[11px] font-black ${
+                  recon.status === "PASS" ? "text-emerald-400" : recon.status === "FAIL" ? "text-rose-400" : "text-amber-400"
+                }`}>
+                  {recon.status === "PASS" ? "✓ مطابق" : "⚠️ يحتاج مراجعة"}
+                </span>
+                <span className="text-[10px] text-[#6B7280] font-mono">{recon.recordsPassed}/{recon.recordsChecked}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
       
       {/* Coverage Audit Section */}
       <div className="mt-4 pt-4 border-t border-[#292B2E]">
@@ -146,15 +294,31 @@ export const NestaGuardian: React.FC<NestaGuardianProps> = ({ onFilterChange, cu
         
         {auditResult && (
           <div className="mt-4 grid grid-cols-3 gap-3">
-            <div className="bg-[#18191B] p-3 rounded-xl border border-[#292B2E]">
+            <button
+              onClick={() => setDrillDown({
+                isOpen: true,
+                title: "مراجعة ملفات عملاء قاعدة البيانات (DB)",
+                entityType: "Customer",
+                records: customers
+              })}
+              className="bg-[#18191B] hover:bg-zinc-800 p-3 rounded-xl border border-[#292B2E] text-right cursor-pointer"
+            >
               <p className="text-xs text-[#A1A1AA]">العملاء في قاعدة البيانات (DB)</p>
               <p className="text-lg font-black text-[#EDEDED]">{auditResult.dbCount}</p>
-            </div>
-            <div className="bg-[#18191B] p-3 rounded-xl border border-[#292B2E]">
+            </button>
+            <button
+              onClick={() => setDrillDown({
+                isOpen: true,
+                title: "مراجعة العملاء المحملين بالكامل في الواجهة (UI)",
+                entityType: "Customer",
+                records: customers
+              })}
+              className="bg-[#18191B] hover:bg-zinc-800 p-3 rounded-xl border border-[#292B2E] text-right cursor-pointer"
+            >
               <p className="text-xs text-[#A1A1AA]">العملاء المحملين (UI)</p>
               <p className="text-lg font-black text-emerald-400">{auditResult.visibleCount}</p>
-            </div>
-            <div className={`p-3 rounded-xl border ${auditResult.hiddenCount > 0 ? 'bg-rose-500/10 border-rose-500/30' : 'bg-[#18191B] border-[#292B2E]'}`}>
+            </button>
+            <div className={`p-3 rounded-xl border text-right ${auditResult.hiddenCount > 0 ? 'bg-rose-500/10 border-rose-500/30' : 'bg-[#18191B] border-[#292B2E]'}`}>
               <p className="text-xs text-[#A1A1AA]">العملاء المختفين (Hidden)</p>
               <p className={`text-lg font-black ${auditResult.hiddenCount > 0 ? 'text-rose-400' : 'text-[#EDEDED]'}`}>{auditResult.hiddenCount}</p>
             </div>
@@ -176,7 +340,17 @@ export const NestaGuardian: React.FC<NestaGuardianProps> = ({ onFilterChange, cu
         )}
       </div>
 
-    </div>
+      {/* Drill Down Modal Integration */}
+      <DrillDownModal
+        isOpen={drillDown.isOpen}
+        onClose={() => setDrillDown(prev => ({ ...prev, isOpen: false }))}
+        title={drillDown.title}
+        entityType={drillDown.entityType}
+        records={drillDown.records}
+        snapshot={snapshot}
+        activeIssues={diagResult.issues}
+        classificationFilter={drillDown.classificationFilter}
+      />
     </div>
   );
 };

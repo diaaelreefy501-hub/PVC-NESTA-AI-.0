@@ -1,5 +1,10 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { supabase } from "../integrations/supabase/client";
+import { 
+  calculateContractBalance, 
+  generateEmployeeStatements
+} from "../utils/financeEngine";
+import { runCollectionReconciliation } from "../utils/reconciliationDiagnostic";
 import {
   cleanCustomer,
   cleanCustomerUpdate,
@@ -12,13 +17,26 @@ import {
   cleanSale,
   cleanCompany,
   cleanCompanyUpdate,
+  cleanEmployee,
+  cleanEmployeeUpdate,
   cleanPayment,
   cleanInspection,
   cleanInspectionUpdate,
   cleanInteraction,
+  cleanMonthlyStatement,
   extractContractCollectionStatus,
 } from "../integrations/supabase/sanitizer";
 import {
+  isSystemOwner as checkIsSystemOwner,
+  isCompanyManager as checkIsCompanyManager,
+  isEmployee as checkIsEmployee,
+  canDeleteRecord as checkCanDeleteRecord,
+  canApproveRecord as checkCanApproveRecord,
+  canManageFinance as checkCanManageFinance,
+  canManageSettings as checkCanManageSettings,
+} from "../utils/rbac";
+import {
+  MonthlyStatement,
   Company,
   Customer,
   Inquiry,
@@ -53,6 +71,11 @@ import {
   PriorityLevel,
   AuditLogEntry,
   DataReviewItem,
+  Employee,
+  EmployeeSalaryRecord,
+  SalaryPayment,
+  CommissionPayment,
+  CommissionAdjustment,
 } from "../types";
 import {
   PredictiveAlert,
@@ -86,7 +109,11 @@ import {
   initialInteractions,
   initialInspections,
   initialProducts,
+  initialEmployees,
+  initialSalaryPayments,
+  initialCommissionPayments,
 } from "../data/initialData";
+import { computeUnifiedKPIs, KPIEngineDataSnapshot, UnifiedKPIResult } from "../utils/kpiEngine";
 import { globalPersistenceEngine, ChangeRecord, EntityType, ChangeAction } from "../dataLayer/persistenceEngine";
 
 export const normalizeEgyptianPhone = (phone: string): string => {
@@ -134,6 +161,11 @@ interface AppContextType {
   allCompanies: Company[];
   activeCompanyId: CompanyId | "all";
   setActiveCompanyId: (id: CompanyId | "all") => void;
+  selectedCompanyIds: string[];
+  setSelectedCompanyIds: (ids: string[]) => void;
+  toggleCompanySelection: (id: string) => void;
+  selectAllCompanies: () => void;
+  clearAllCompanySelection: () => void;
   activeCompany: Company | null;
   currentTab: NavigationTab;
   setCurrentTab: (tab: NavigationTab) => void;
@@ -157,6 +189,12 @@ interface AppContextType {
   opportunities: Opportunity[];
   products: Product[];
   tasks: TaskItem[];
+  employees: Employee[];
+  salaryPayments: SalaryPayment[];
+  commissionPayments: CommissionPayment[];
+  employeeStatements: Record<string, MonthlyStatement[]>;
+  reconciliationReport: any;
+  reconciledContracts: Contract[];
 
   // Filtered by activeCompanyId & Global Filters
   filteredCustomers: Customer[];
@@ -170,6 +208,23 @@ interface AppContextType {
   filteredOpportunities: Opportunity[];
   filteredProducts: Product[];
   filteredTasks: TaskItem[];
+  filteredEmployees: Employee[];
+
+  // Employee & Payroll Management
+  addEmployee: (emp: Omit<Employee, "id" | "createdAt">) => Employee;
+  updateEmployee: (id: string, updates: Partial<Employee>) => void;
+  toggleEmployeeStatus: (id: string) => void;
+  updateEmployeeSalary: (employeeId: string, newSalary: number, effectivePeriod: string, notes?: string) => void;
+  recordSalaryPayment: (payment: Omit<SalaryPayment, "id" | "createdAt">) => SalaryPayment;
+  recordCommissionPayment: (payment: Omit<CommissionPayment, "id" | "createdAt">) => CommissionPayment;
+  deleteSalaryPayment: (id: string) => void;
+  deleteCommissionPayment: (id: string) => void;
+  addCommissionAdjustment: (adj: Omit<CommissionAdjustment, "id" | "createdAt">) => void;
+  deleteCommissionAdjustment: (employeeId: string, adjustmentId: string) => void;
+  updateStatementOverride: (data: Partial<MonthlyStatement> & { employeeId: string; period: string }) => void;
+  approveStatement: (employeeId: string, period: string, notes?: string) => void;
+  recalculateStatement: (employeeId: string, period: string) => void;
+  updateCommissionRate: (employeeId: string, newRate: number, effectivePeriod: string, notes?: string) => void;
 
   // Products CRUD
   addProduct: (data: Omit<Product, "id" | "createdAt" | "updatedAt">) => Product;
@@ -199,6 +254,13 @@ interface AppContextType {
   assignUserCompanyRole: (userId: string, companyId: CompanyId, role: CompanyRole) => void;
   removeUserFromCompany: (userId: string, companyId: CompanyId) => void;
   updateUserTarget: (companyId: CompanyId, userId: string, target: number) => void;
+  isSystemOwner: boolean;
+  isCompanyManager: boolean;
+  isEmployee: boolean;
+  canDeleteRecords: boolean;
+  canApproveRecords: boolean;
+  canManageFinance: boolean;
+  canManageSettings: boolean;
 
   // Opportunities & Deal Closing
   addOpportunity: (data: Omit<Opportunity, "id" | "createdAt">) => Opportunity;
@@ -220,6 +282,7 @@ interface AppContextType {
   monthlySalesTotal: number;
   monthlyTargetTotal: number;
   monthlyAchievementRate: number;
+  unifiedKPIs: UnifiedKPIResult;
   quotesNeedingFollowUp: Quotation[];
   calculateContractedSalesTotal: (contractsList: Contract[], companyId: string, area?: string, month?: string) => number;
   getContractedSalesDebugReport: (companyId?: string, area?: string, month?: string) => any;
@@ -308,6 +371,8 @@ interface AppContextType {
   clearAuditLogs: () => void;
   addCompany: (comp: Omit<Company, "id">) => Company;
   updateCompany: (id: string, updates: Partial<Company>) => void;
+  archiveCompany: (id: string) => void;
+  restoreCompany: (id: string) => void;
   deleteCompany: (id: string) => void;
   updateCompanyTarget: (companyId: CompanyId, newTarget: number, annualTarget?: number) => void;
   resetDataToDefault: () => void;
@@ -469,7 +534,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
     }
   };
 
-  const [companies, setCompanies] = useState<Company[]>([]);
+  const [companies, setCompanies] = useState<Company[]>(() => {
+    const init = getInitial<Company[]>("companies", []);
+    return init && init.length > 0 ? init : initialCompanies;
+  });
+
+  const [employees, setEmployees] = useState<Employee[]>(() => {
+    const init = getInitial<Employee[]>("employees", []);
+    return init && init.length > 0 ? init : initialEmployees;
+  });
+
+  const [salaryPayments, setSalaryPayments] = useState<SalaryPayment[]>(() => {
+    const init = getInitial<SalaryPayment[]>("salaryPayments", []);
+    return init && init.length > 0 ? init : initialSalaryPayments;
+  });
+
+  const [commissionPayments, setCommissionPayments] = useState<CommissionPayment[]>(() => {
+    const init = getInitial<CommissionPayment[]>("commissionPayments", []);
+    return init && init.length > 0 ? init : initialCommissionPayments;
+  });
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_PREFIX + "employees", JSON.stringify(employees));
+  }, [employees]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_PREFIX + "salaryPayments", JSON.stringify(salaryPayments));
+  }, [salaryPayments]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_PREFIX + "commissionPayments", JSON.stringify(commissionPayments));
+  }, [commissionPayments]);
 
   // Settings States
   const [users, setUsers] = useState<AppUser[]>([]);
@@ -493,7 +588,79 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
     return init && init.length > 0 ? init : DEFAULT_LOSS_REASONS;
   });
 
-  const [activeCompanyId, setActiveCompanyId] = useState<CompanyId | "all">("all");
+  const [activeCompanyId, setActiveCompanyIdState] = useState<CompanyId | "all">("all");
+  const [selectedCompanyIds, setSelectedCompanyIdsState] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_PREFIX + "selectedCompanyIds");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {}
+    return [];
+  });
+
+  const setSelectedCompanyIds = useCallback((ids: string[]) => {
+    setSelectedCompanyIdsState(ids);
+    try {
+      localStorage.setItem(STORAGE_PREFIX + "selectedCompanyIds", JSON.stringify(ids));
+    } catch (e) {}
+    if (ids.length === 1) {
+      setActiveCompanyIdState(ids[0] as CompanyId);
+    } else {
+      setActiveCompanyIdState("all");
+    }
+  }, []);
+
+  const setActiveCompanyId = useCallback((id: CompanyId | "all") => {
+    setActiveCompanyIdState(id);
+    if (id === "all") {
+      setSelectedCompanyIdsState([]);
+      try {
+        localStorage.setItem(STORAGE_PREFIX + "selectedCompanyIds", JSON.stringify([]));
+      } catch (e) {}
+    } else {
+      setSelectedCompanyIdsState([id]);
+      try {
+        localStorage.setItem(STORAGE_PREFIX + "selectedCompanyIds", JSON.stringify([id]));
+      } catch (e) {}
+    }
+  }, []);
+
+  const toggleCompanySelection = useCallback((id: string) => {
+    setSelectedCompanyIdsState((prev) => {
+      let next: string[];
+      if (prev.length === 0 || prev.includes("all")) {
+        next = [id];
+      } else if (prev.includes(id)) {
+        next = prev.filter((item) => item !== id);
+      } else {
+        next = [...prev, id];
+      }
+      try {
+        localStorage.setItem(STORAGE_PREFIX + "selectedCompanyIds", JSON.stringify(next));
+      } catch (e) {}
+      if (next.length === 1) {
+        setActiveCompanyIdState(next[0] as CompanyId);
+      } else {
+        setActiveCompanyIdState("all");
+      }
+      return next;
+    });
+  }, []);
+
+  const selectAllCompanies = useCallback(() => {
+    setSelectedCompanyIds([]);
+    setActiveCompanyIdState("all");
+  }, [setSelectedCompanyIds]);
+
+  const clearAllCompanySelection = useCallback(() => {
+    setSelectedCompanyIdsState([]);
+    setActiveCompanyIdState("all");
+    try {
+      localStorage.removeItem(STORAGE_PREFIX + "selectedCompanyIds");
+    } catch (e) {}
+  }, []);
   const [currentTab, setCurrentTab] = useState<NavigationTab>("dashboard");
   const [navigationFilter, setNavigationFilter] = useState<NavigationFilterContext | null>(null);
   const [selectedCustomerIdFor360, setSelectedCustomerIdFor360] = useState<string | null>(null);
@@ -595,6 +762,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
     getInitial("deleted_opportunity_ids", [])
   );
 
+  const employeeStatements = useMemo(() => {
+    const map: Record<string, MonthlyStatement[]> = {};
+    employees.forEach(emp => {
+      map[emp.id] = generateEmployeeStatements(
+        emp, 
+        companies, 
+        contracts, 
+        payments, 
+        salaryPayments, 
+        commissionPayments, 
+        emp.commissionAdjustments || []
+      );
+    });
+    return map;
+  }, [employees, companies, contracts, payments, salaryPayments, commissionPayments]);
+
+  const reconciliationReport = useMemo(() => {
+    return runCollectionReconciliation(contracts, payments);
+  }, [contracts, payments]);
+
   useEffect(() => {
     localStorage.setItem(STORAGE_PREFIX + "deleted_opportunity_ids", JSON.stringify(deletedOpportunityIds));
   }, [deletedOpportunityIds]);
@@ -612,12 +799,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
   }, []);
 
   const excludeRecord = useCallback((entityType: string, entityId: string, reason: string) => {
-    if (entityType === 'contract') {
+    const typeLower = entityType.toLowerCase();
+    if (typeLower === 'contract') {
       setContracts(prev => prev.map(c => c.id === entityId ? { ...c, recordStatus: 'excluded', exclusionReason: reason, excludedAt: new Date().toISOString() } : c));
-    } else if (entityType === 'sale') {
+    } else if (typeLower === 'sale') {
       setSales(prev => prev.map(s => s.id === entityId ? { ...s, recordStatus: 'excluded', exclusionReason: reason, excludedAt: new Date().toISOString() } : s));
-    } else if (entityType === 'opportunity') {
+    } else if (typeLower === 'opportunity') {
       setOpportunities(prev => prev.map(o => o.id === entityId ? { ...o, recordStatus: 'excluded', exclusionReason: reason, excludedAt: new Date().toISOString() } : o));
+    } else if (typeLower === 'customer') {
+      setCustomers(prev => prev.map(c => c.id === entityId ? { ...c, recordStatus: 'excluded', exclusionReason: reason, excludedAt: new Date().toISOString() } as any : c));
+    } else if (typeLower === 'inquiry') {
+      setInquiries(prev => prev.map(i => i.id === entityId ? { ...i, recordStatus: 'excluded', exclusionReason: reason, excludedAt: new Date().toISOString() } as any : i));
+    } else if (typeLower === 'quotation') {
+      setQuotations(prev => prev.map(q => q.id === entityId ? { ...q, recordStatus: 'excluded', exclusionReason: reason, excludedAt: new Date().toISOString() } as any : q));
+    } else if (typeLower === 'followup') {
+      setFollowUps(prev => prev.map(f => f.id === entityId ? { ...f, recordStatus: 'excluded', exclusionReason: reason, excludedAt: new Date().toISOString() } as any : f));
+    } else if (typeLower === 'inspection') {
+      setInspections(prev => prev.map(ins => ins.id === entityId ? { ...ins, recordStatus: 'excluded', exclusionReason: reason, excludedAt: new Date().toISOString() } as any : ins));
     }
     setDataReviewItems(prev => prev.filter(i => i.entityId !== entityId));
     showToast("تم استبعاد السجل من الحسابات والـ KPIs بنجاح", "info");
@@ -752,7 +950,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
     currentSales: Sale[],
     currentFollowUps: FollowUp[] = [],
     currentInspections: Inspection[] = [],
-    currentInteractions: Interaction[] = []
+    currentInteractions: Interaction[] = [],
+    currentPayments: Payment[] = []
   ) => {
     // PVC NESTA Safe Non-Destructive Association
     // Preserves original creation dates and avoids creating synthetic duplicate records.
@@ -815,7 +1014,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
       }
     });
 
-    // Reconcile each opportunity
+    // Reconcile each opportunity with explicit, validated linkages
     updatedOpportunities.forEach((opp) => {
       const oppPhone = cleanPhone(opp.customerPhone);
 
@@ -839,14 +1038,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         }
       }
 
-      // 2. Link to Inquiry
+      // 2. Link to Inquiry (only if explicitly linked)
       let inq = opp.inquiryId ? inquiryMapById.get(opp.inquiryId) : undefined;
-      if (!inq && cust) {
-        inq = inquiryMapByCust.get(cust.id);
-      }
-      if (!inq && oppPhone) {
-        inq = inquiryMapByPhone.get(oppPhone);
-      }
       if (inq) {
         opp.inquiryId = inq.id;
         if (!opp.productType || opp.productType === "عام") {
@@ -854,7 +1047,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         }
       }
 
-      // 3. Link to Quotation
+      // 3. Link to Quotation (only if explicitly linked by ID, quote number, or quotation references this opp)
       let quote = opp.quotationId ? quoteMapById.get(opp.quotationId) : undefined;
       if (!quote && opp.quoteNumber) {
         quote = quoteMapByNum.get(opp.quoteNumber.trim());
@@ -865,8 +1058,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
           quote = quoteMapByNum.get(match[0]);
         }
       }
-      if (!quote && cust) {
-        quote = quoteMapByCust.get(`${cust.id}_${opp.companyId}`);
+      if (!quote) {
+        quote = updatedQuotations.find((q) => q.opportunityId === opp.id);
       }
 
       if (quote) {
@@ -894,13 +1087,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         }
       }
 
-      // 4. Link to Contract
+      // 4. Link to Contract (only if explicitly linked to this opportunity or this opportunity's quote)
       let ct = contractMapByOpp.get(opp.id);
+      if (!ct && opp.contractId) {
+        ct = updatedContracts.find((c) => c.id === opp.contractId);
+      }
       if (!ct && quote) {
         ct = contractMapByQuote.get(quote.id);
-      }
-      if (!ct && cust) {
-        ct = contractMapByCust.get(`${cust.id}_${opp.companyId}`);
       }
       if (ct) {
         opp.hasContract = true;
@@ -913,12 +1106,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
       }
 
       // 5. Link to Follow-up
-      if (cust) {
+      if (cust && opp.status === "open" && !opp.nextFollowUpDate) {
         const fup = followUpMapByCust.get(cust.id);
-        if (fup && opp.status === "open") {
+        if (fup) {
           opp.nextFollowUpDate = fup.dueDate;
-          opp.nextAction = fup.title || opp.nextAction;
+          opp.nextAction = opp.nextAction || fup.title;
         }
+      }
+    });
+
+    // 6. Financial Reconciliation (PVC NESTA Single Source of Truth)
+    // Ensures all contracts correctly reflect the sum of their confirmed payments.
+    updatedContracts.forEach(c => {
+      const balance = calculateContractBalance(c, currentPayments);
+      c.paidAmount = balance.collectedAmount;
+      c.remainingAmount = balance.outstandingBalance;
+      
+      // Auto-update status if fully collected
+      if (c.remainingAmount === 0 && (c.totalValue || 0) > 0) {
+        c.collectionStatus = "collected";
+        if (c.status !== "cancelled") {
+          c.status = "completed";
+        }
+      } else if (c.paidAmount > 0) {
+        c.collectionStatus = "partial";
       }
     });
 
@@ -1069,6 +1280,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
       let qInq = supabase.from("inquiries").select("*").order("date", { ascending: false }).limit(5000);
       let qInsp = supabase.from("inspections").select("*").order("date", { ascending: false }).limit(5000);
       let qInter = supabase.from("interactions").select("*").order("date", { ascending: false }).limit(5000);
+      let qEmployees = supabase.from("employees").select("*").order("name");
+      let qSalPay = supabase.from("salary_payments").select("*").order("paymentDate", { ascending: false });
+      let qCommPay = supabase.from("commission_payments").select("*").order("paymentDate", { ascending: false });
+      let qCommAdj = supabase.from("commission_adjustments").select("*").order("createdAt", { ascending: false });
+      let qMonthlyStatements = supabase.from("monthly_statements").select("*");
+      let qAudit = supabase.from("audit_logs").select("*").order("timestamp", { ascending: false }).limit(1000);
 
       // Apply isolation strictly if not a super user
       if (!isSuper && companyFilter.length > 0) {
@@ -1082,6 +1299,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         qInq = qInq.in("companyId", companyFilter);
         qInsp = qInsp.in("companyId", companyFilter);
         qInter = qInter.in("companyId", companyFilter);
+        qEmployees = qEmployees.in("companyId", companyFilter);
+        qSalPay = qSalPay.in("companyId", companyFilter);
+        qCommPay = qCommPay.in("companyId", companyFilter);
+        qCommAdj = qCommAdj.in("companyId", companyFilter);
+        qMonthlyStatements = qMonthlyStatements.in("companyId", companyFilter);
+        qAudit = qAudit.in("companyId", companyFilter);
       } else if (!isSuper && companyFilter.length === 0) {
         // Fallback: user has NO access. Force impossible condition to return empty safely.
         qCompanies = qCompanies.eq("id", "blocked-access");
@@ -1094,6 +1317,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         qInq = qInq.eq("companyId", "blocked-access");
         qInsp = qInsp.eq("companyId", "blocked-access");
         qInter = qInter.eq("companyId", "blocked-access");
+        qEmployees = qEmployees.eq("companyId", "blocked-access");
+        qSalPay = qSalPay.eq("companyId", "blocked-access");
+        qCommPay = qCommPay.eq("companyId", "blocked-access");
+        qCommAdj = qCommAdj.eq("companyId", "blocked-access");
+        qMonthlyStatements = qMonthlyStatements.eq("companyId", "blocked-access");
+        qAudit = qAudit.eq("companyId", "blocked-access");
       }
 
       // 3. Execute all queries
@@ -1107,7 +1336,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         salesRes,
         inquiriesRes,
         inspectionsRes,
-        interactionsRes
+        interactionsRes,
+        empRes,
+        salPayRes,
+        commPayRes,
+        commAdjRes,
+        monthlyStmtRes,
+        auditRes
       ] = await Promise.all([
         qCompanies,
         qCust,
@@ -1118,7 +1353,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         qSales,
         qInq,
         qInsp,
-        qInter
+        qInter,
+        qEmployees,
+        qSalPay,
+        qCommPay,
+        qCommAdj,
+        qMonthlyStatements,
+        qAudit
       ]);
 
       if (custRes.error) {
@@ -1138,6 +1379,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         setInspections([]);
         setInteractions([]);
         setOpportunities([]);
+        setEmployees([]);
       } else {
         setIsCloudConnected(true);
         
@@ -1169,6 +1411,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         if (salesRes.data) setSales(salesRes.data as Sale[]);
         if (inquiriesRes.data) setInquiries(inquiriesRes.data as Inquiry[]);
         if (inspectionsRes.data) setInspections(inspectionsRes.data as Inspection[]);
+        if (auditRes.data) setAuditLogs(auditRes.data as AuditLogEntry[]);
+        
+        const allSalPayments = (salPayRes.data || []) as SalaryPayment[];
+        const allCommPayments = (commPayRes.data || []) as CommissionPayment[];
+        const allCommAdjs = (commAdjRes.data || []) as CommissionAdjustment[];
+        const allMonthlyStatements = (monthlyStmtRes.data || []) as MonthlyStatement[];
+
+        setSalaryPayments(allSalPayments);
+        setCommissionPayments(allCommPayments);
+
+        if (empRes && empRes.data) {
+          const loadedEmps: Employee[] = (empRes.data as any[]).map((e) => {
+            const empAdjs = allCommAdjs.filter(a => a.employeeId === e.id);
+            const empStatements = allMonthlyStatements.filter(s => s.employeeId === e.id);
+
+            return {
+              id: e.id,
+              companyId: e.companyId,
+              name: e.name,
+              role: e.role || "موظف",
+              phone: e.phone || undefined,
+              email: e.email || undefined,
+              startDate: e.startDate || new Date().toISOString().split("T")[0],
+              active: e.active !== false,
+              monthlySalary: Number(e.monthlySalary) || 0,
+              commissionRule: e.commissionRule || "percentage_of_contract",
+              commissionPercentage: Number(e.commissionPercentage) || 0,
+              commissionTiming: e.commissionTiming || "contract_signing",
+              commissionNotes: e.commissionNotes || undefined,
+              createdAt: e.createdAt || new Date().toISOString().split("T")[0],
+              updatedAt: e.updatedAt || undefined,
+              commissionAdjustments: empAdjs,
+              monthlyStatements: empStatements,
+              salaryHistory: Array.isArray(e.salaryHistory) ? e.salaryHistory : [
+                {
+                  id: `sal-rec-${e.id}`,
+                  employeeId: e.id,
+                  companyId: e.companyId,
+                  effectiveFrom: e.startDate ? e.startDate.slice(0, 7) : new Date().toISOString().slice(0, 7),
+                  monthlySalary: Number(e.monthlySalary) || 0,
+                  notes: "الراتب الأساسي المعتمد",
+                  createdAt: e.createdAt || new Date().toISOString(),
+                },
+              ],
+              commissionHistory: Array.isArray(e.commissionHistory) ? e.commissionHistory : [],
+            };
+          });
+          setEmployees(loadedEmps);
+        }
 
         const cloudCustomers = globalPersistenceEngine.reconcileCloudWithPending((custRes.data as Customer[]) || [], "customer");
         const rawCloudContracts = ((contRes.data as Contract[]) || []).map((c: any) => ({
@@ -1181,6 +1472,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         const cloudSales = globalPersistenceEngine.reconcileCloudWithPending((salesRes.data as Sale[]) || [], "sale");
         const cloudFollowUps = globalPersistenceEngine.reconcileCloudWithPending((followRes.data as FollowUp[]) || [], "followup");
         const cloudInspections = globalPersistenceEngine.reconcileCloudWithPending((inspectionsRes.data as Inspection[]) || [], "inspection");
+        const cloudPayments = globalPersistenceEngine.reconcileCloudWithPending((payRes.data as Payment[]) || [], "payment");
         
         let loadedOpportunities: Opportunity[] = [];
         let normalInteractions: Interaction[] = [];
@@ -1197,7 +1489,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
                 return null;
               }
             })
-            .filter((o): o is Opportunity => Boolean(o && !deletedSet.has(o.id) && (o.status === "open" || o.status === "lost")));
+            .filter((o): o is Opportunity => Boolean(o && !deletedSet.has(o.id) && (o.status === "open" || o.status === "lost" || o.status === "won")));
 
           setInteractions(normalInteractions);
           loadedOpportunities = cloudOpportunities;
@@ -1213,7 +1505,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
           cloudSales,
           cloudFollowUps,
           cloudInspections,
-          normalInteractions
+          normalInteractions,
+          cloudPayments
         );
 
         setCustomers(reconciled.updatedCustomers);
@@ -1355,16 +1648,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
 
   // Active Company
   const activeCompany = useMemo(() => {
-    if (activeCompanyId === "all") return null;
-    return accessibleCompanies.find((c) => c.id === activeCompanyId) || null;
-  }, [accessibleCompanies, activeCompanyId]);
+    if (selectedCompanyIds && selectedCompanyIds.length === 1 && selectedCompanyIds[0] !== "all") {
+      return accessibleCompanies.find((c) => c.id === selectedCompanyIds[0]) || null;
+    }
+    if (activeCompanyId !== "all") {
+      return accessibleCompanies.find((c) => c.id === activeCompanyId) || null;
+    }
+    return null;
+  }, [accessibleCompanies, selectedCompanyIds, activeCompanyId]);
+
+  const isCompanySelected = useCallback(
+    (compId?: string) => {
+      if (!compId) return true;
+
+      // Strict security check: if currentUser has restricted allowedCompanyIds, prevent access to any other company
+      if (currentUser && currentUser.role !== "owner" && !currentUser.allowedCompanyIds.includes("all")) {
+        if (!currentUser.allowedCompanyIds.includes(compId)) {
+          return false;
+        }
+      }
+
+      if (selectedCompanyIds && selectedCompanyIds.length > 0 && !selectedCompanyIds.includes("all")) {
+        return selectedCompanyIds.includes(compId);
+      }
+      if (activeCompanyId !== "all") {
+        return compId === activeCompanyId;
+      }
+      return true;
+    },
+    [selectedCompanyIds, activeCompanyId, currentUser]
+  );
 
   // Filtered arrays
   const filteredCustomers = useMemo(() => {
-    let list = customers;
-    if (activeCompanyId !== "all") {
-      list = customers.filter((c) => c.companyId === activeCompanyId);
-    }
+    const list = customers.filter((c) => isCompanySelected(c.companyId));
     // Dynamically calculate accurate sales and quotations values as Single Source of Truth
     return list.map((c) => {
       const custSales = sales.filter((s) => s.customerId === c.id);
@@ -1378,72 +1695,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         totalQuotationsValue: calcQuotes
       };
     });
-  }, [customers, activeCompanyId, sales, quotations]);
+  }, [customers, isCompanySelected, sales, quotations]);
 
   const filteredInquiries = useMemo(() => {
-    const list = activeCompanyId === "all" ? inquiries : inquiries.filter((i) => i.companyId === activeCompanyId);
-    return list.map((inq) => {
-      const cust = customers.find((c) => c.id === inq.customerId);
-      if (!cust) return inq;
-      if (cust.stage && cust.stage !== inq.stage) {
-        return { ...inq, stage: cust.stage };
-      }
-      return inq;
-    });
-  }, [inquiries, activeCompanyId, customers]);
+    return inquiries.filter((i) => isCompanySelected(i.companyId));
+  }, [inquiries, isCompanySelected]);
 
   const filteredFollowUps = useMemo(() => {
-    const list = activeCompanyId === "all" ? followUps : followUps.filter((f) => f.companyId === activeCompanyId);
-    return list.map((f) => {
-      if (f.status === "pending") {
-        const cust = customers.find((c) => c.id === f.customerId);
-        if (cust && (cust.stage === "contracted" || cust.stage === "sold" || cust.stage === "won" || cust.stage === "lost")) {
-          return { ...f, status: "completed" as const };
-        }
-      }
-      return f;
-    });
-  }, [followUps, activeCompanyId, customers]);
+    return followUps.filter((f) => isCompanySelected(f.companyId));
+  }, [followUps, isCompanySelected]);
 
   const filteredQuotations = useMemo(() => {
-    if (activeCompanyId === "all") return quotations;
-    return quotations.filter((q) => q.companyId === activeCompanyId);
-  }, [quotations, activeCompanyId]);
+    return quotations.filter((q) => isCompanySelected(q.companyId));
+  }, [quotations, isCompanySelected]);
 
   const filteredInspections = useMemo(() => {
-    if (activeCompanyId === "all") return inspections;
-    return inspections.filter((i) => i.companyId === activeCompanyId);
-  }, [inspections, activeCompanyId]);
+    return inspections.filter((i) => isCompanySelected(i.companyId));
+  }, [inspections, isCompanySelected]);
 
   const filteredContracts = useMemo(() => {
-    if (activeCompanyId === "all") return contracts;
-    return contracts.filter((c) => c.companyId === activeCompanyId);
-  }, [contracts, activeCompanyId]);
+    return contracts.filter((c) => isCompanySelected(c.companyId));
+  }, [contracts, isCompanySelected]);
 
   const filteredPayments = useMemo(() => {
-    if (activeCompanyId === "all") return payments;
-    return payments.filter((p) => p.companyId === activeCompanyId);
-  }, [payments, activeCompanyId]);
+    return payments.filter((p) => isCompanySelected(p.companyId));
+  }, [payments, isCompanySelected]);
 
   const filteredSales = useMemo(() => {
-    if (activeCompanyId === "all") return sales;
-    return sales.filter((s) => s.companyId === activeCompanyId);
-  }, [sales, activeCompanyId]);
+    return sales.filter((s) => isCompanySelected(s.companyId));
+  }, [sales, isCompanySelected]);
 
   const filteredOpportunities = useMemo(() => {
-    if (activeCompanyId === "all") return opportunities;
-    return opportunities.filter((o) => o.companyId === activeCompanyId);
-  }, [opportunities, activeCompanyId]);
+    return opportunities.filter((o) => isCompanySelected(o.companyId));
+  }, [opportunities, isCompanySelected]);
 
   const filteredProducts = useMemo(() => {
-    if (activeCompanyId === "all") return products;
-    return products.filter((p) => p.companyId === activeCompanyId || !p.companyId);
-  }, [products, activeCompanyId]);
+    return products.filter((p) => !p.companyId || isCompanySelected(p.companyId));
+  }, [products, isCompanySelected]);
 
   const filteredTasks = useMemo(() => {
-    if (activeCompanyId === "all") return tasks;
-    return tasks.filter((t) => t.companyId === activeCompanyId);
-  }, [tasks, activeCompanyId]);
+    return tasks.filter((t) => isCompanySelected(t.companyId));
+  }, [tasks, isCompanySelected]);
+
+  const filteredEmployees = useMemo(() => {
+    return employees.filter((e) => isCompanySelected(e.companyId));
+  }, [employees, isCompanySelected]);
 
   // Global Filter Utilities
   const isDateInRange = useCallback(
@@ -1620,6 +1916,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
 
   const currentMonthPrefix = todayStr.slice(0, 7);
 
+  // Centralized Unified KPI computation using computeUnifiedKPIs
+  const kpiSnapshot = useMemo<KPIEngineDataSnapshot>(() => {
+    return {
+      companies,
+      customers,
+      inquiries,
+      followUps,
+      opportunities,
+      quotations,
+      inspections,
+      contracts,
+      sales,
+      payments,
+    };
+  }, [
+    companies,
+    customers,
+    inquiries,
+    followUps,
+    opportunities,
+    quotations,
+    inspections,
+    contracts,
+    sales,
+    payments,
+  ]);
+
+  const unifiedKPIs = useMemo<UnifiedKPIResult>(() => {
+    return computeUnifiedKPIs(kpiSnapshot, {
+      companyId: activeCompanyId,
+      month: currentMonthPrefix,
+    });
+  }, [kpiSnapshot, activeCompanyId, currentMonthPrefix]);
+
   const todaySalesTotal = useMemo(() => {
     return filteredSales
       .filter((s) => s.date === todayStr)
@@ -1630,11 +1960,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
     if (salesOverrideValue !== null) {
       return salesOverrideValue;
     }
-    const calculated = filteredSales
-      .filter((s) => s.date && s.date.startsWith(currentMonthPrefix))
-      .reduce((acc, s) => acc + s.amount, 0);
-    return calculated + salesManualAdjustment;
-  }, [filteredSales, currentMonthPrefix, salesOverrideValue, salesManualAdjustment]);
+    // Use unified sales computation from computeUnifiedKPIs plus any adjustments
+    const baseTotal = unifiedKPIs.sales.totalAmount;
+    return baseTotal + salesManualAdjustment;
+  }, [unifiedKPIs.sales.totalAmount, salesOverrideValue, salesManualAdjustment]);
 
   const monthlyTargetTotal = useMemo(() => {
     if (activeCompanyId === "all") {
@@ -1671,24 +2000,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
 
   const currentCompanyRole = useMemo<CompanyRole>(() => {
     if (!currentUser) return "viewer";
-    if (currentUser.role === "owner") return "owner";
+    if (currentUser.role === "owner" || currentUser.role === "super_admin") return "owner";
     if (activeCompanyId === "all") {
-      if (currentUser.role === "admin") return "admin";
+      if (currentUser.role === "admin" || currentUser.role === "manager") return "admin";
       return currentUser.role === "sales" ? "sales" : "viewer";
     }
     return getUserRoleInCompany(currentUser, activeCompanyId);
   }, [currentUser, activeCompanyId, getUserRoleInCompany]);
 
+  const isSystemOwner = useMemo(() => {
+    return checkIsSystemOwner(currentUser);
+  }, [currentUser]);
+
+  const isCompanyManager = useMemo(() => {
+    return checkIsCompanyManager(currentUser, currentCompanyRole);
+  }, [currentUser, currentCompanyRole]);
+
+  const isEmployee = useMemo(() => {
+    return checkIsEmployee(currentUser, currentCompanyRole);
+  }, [currentUser, currentCompanyRole]);
+
+  const canDeleteRecords = isCompanyManager;
+  const canApproveRecords = isCompanyManager;
+  const canManageFinance = isCompanyManager;
+  const canManageSettings = isCompanyManager;
+
   const hasPermission = useCallback(
     (permission: PermissionName, targetCompanyId?: CompanyId): boolean => {
       if (!currentUser) return false;
-      if (currentUser.role === "owner") return true;
+      if (currentUser.role === "owner" || currentUser.role === "super_admin") return true;
 
       const effCompId =
         targetCompanyId || (activeCompanyId !== "all" ? activeCompanyId : undefined);
       const role: CompanyRole = effCompId
         ? getUserRoleInCompany(currentUser, effCompId)
-        : currentUser.role === "admin"
+        : (currentUser.role === "admin" || currentUser.role === "manager")
         ? "admin"
         : currentUser.role === "sales"
         ? "sales"
@@ -1696,6 +2042,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
 
       switch (role) {
         case "owner":
+        case "super_admin":
         case "admin":
           return true;
         case "manager":
@@ -1710,6 +2057,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
             "manage_quotations",
             "close_opportunities",
             "manage_sales",
+            "view_analytics",
           ].includes(permission);
         case "viewer":
           return ["view_customers", "view_inquiries", "view_analytics"].includes(permission);
@@ -1812,12 +2160,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
       userName: currentUser?.name || "المسؤول",
       userRole: currentUser?.role || "owner",
     };
+    
+    // UI Update immediate
     setAuditLogs((prev) => [newLog, ...prev.slice(0, 500)]);
+
+    // Cloud Persistence (Supabase = Single Source of Truth for Audit)
+    if (supabase) {
+      supabase.from("audit_logs").insert([newLog]).then(({ error }: any) => {
+        if (error) console.warn("Failed to push audit log to Supabase:", error);
+      });
+    }
   };
 
   const clearAuditLogs = () => {
     setAuditLogs([]);
     localStorage.removeItem(STORAGE_PREFIX + "auditLogs");
+    
+    // Also try to clear from Supabase if owner/manager
+    if (supabase && (currentUser?.role === 'owner' || checkIsSystemOwner(currentUser))) {
+      supabase.from("audit_logs").delete().neq("id", "keep-this-schema").then(({ error }: any) => {
+        if (error) console.warn("Failed to clear cloud audit logs:", error);
+        else showToast("تم مسح سجل التدقيق من السحابة أيضاً", "info");
+      });
+    }
+    
     showToast("تم مسح سجل التدقيق بالكامل", "info");
   };
 
@@ -1842,6 +2208,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
     silent?: boolean;
   }): Promise<{ success: boolean; change: ChangeRecord }> => {
     const effPayload = params.payload || (params.action === "delete" ? { id: params.recordId } : {});
+
+    // RBAC Security Enforcement Layer
+    const effCompRole = params.companyId && params.companyId !== "all" ? getUserRoleInCompany(currentUser, params.companyId) : currentCompanyRole;
+    const userIsOwner = checkIsSystemOwner(currentUser);
+    const userIsManager = checkIsCompanyManager(currentUser, effCompRole);
+
+    // 1. Enforce Delete Permission: Only Manager and System Owner can delete/archive records
+    if (params.action === "delete" && !userIsManager) {
+      if (!params.silent) {
+        showToast("ليس لديك صلاحية لحذف أو أرشفة السجلات. هذه الصلاحية مخصصة لمدير الشركة ومالك النظام فقط.", "error");
+      }
+      return { success: false, change: null as any };
+    }
+
+    // 2. Enforce Company Settings & Employee Payroll Management: Only Manager and System Owner
+    if ((params.entityType === "company" || params.entityType === "employee") && !userIsManager) {
+      if (!params.silent) {
+        showToast("ليس لديك صلاحية لتعديل إعدادات الشركات أو بيانات ورواتب الموظفين.", "error");
+      }
+      return { success: false, change: null as any };
+    }
 
     // 1. Record Change in Persistence Engine
     const changeRec = globalPersistenceEngine.recordChange({
@@ -1911,6 +2298,384 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
     }
   };
 
+  // Employee & Payroll Operations - Defined here to use executeUnifiedAction
+  const recordSalaryPayment = useCallback(
+    async (paymentData: Omit<SalaryPayment, "id" | "createdAt">): Promise<SalaryPayment> => {
+      const newPayment: SalaryPayment = {
+        ...paymentData,
+        id: `sp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        createdAt: new Date().toISOString(),
+      };
+
+      await executeUnifiedAction({
+        entityType: "salary_payment",
+        recordId: newPayment.id,
+        companyId: newPayment.companyId,
+        action: "insert",
+        payload: newPayment,
+        description: `صرف راتب للموظف: ${newPayment.employeeName} بقيمة ${newPayment.amount.toLocaleString()} ج.م`,
+        applyLocal: () => {
+          setSalaryPayments((prev) => [newPayment, ...prev]);
+        },
+        toastSuccessMsg: `تم تسجيل صرف راتب بقيمة ${newPayment.amount.toLocaleString()} ج.م بنجاح`,
+      });
+
+      return newPayment;
+    },
+    [executeUnifiedAction]
+  );
+
+  const recordCommissionPayment = useCallback(
+    async (paymentData: Omit<CommissionPayment, "id" | "createdAt">): Promise<CommissionPayment> => {
+      const newPayment: CommissionPayment = {
+        ...paymentData,
+        id: `cp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        createdAt: new Date().toISOString(),
+      };
+
+      await executeUnifiedAction({
+        entityType: "commission_payment",
+        recordId: newPayment.id,
+        companyId: newPayment.companyId,
+        action: "insert",
+        payload: newPayment,
+        description: `صرف عمولة للموظف: ${newPayment.employeeName} بقيمة ${newPayment.amount.toLocaleString()} ج.م`,
+        applyLocal: () => {
+          setCommissionPayments((prev) => [newPayment, ...prev]);
+        },
+        toastSuccessMsg: `تم تسجيل صرف عمولة بقيمة ${newPayment.amount.toLocaleString()} ج.م بنجاح`,
+      });
+
+      return newPayment;
+    },
+    [executeUnifiedAction]
+  );
+
+  const deleteSalaryPayment = useCallback(
+    async (id: string) => {
+      const payment = salaryPayments.find(p => p.id === id);
+      if (!payment) return;
+
+      await executeUnifiedAction({
+        entityType: "salary_payment",
+        recordId: id,
+        companyId: payment.companyId,
+        action: "delete",
+        description: `إلغاء صرف راتب للموظف: ${payment.employeeName} بقيمة ${payment.amount.toLocaleString()} ج.م`,
+        applyLocal: () => {
+          setSalaryPayments((prev) => prev.filter((p) => p.id !== id));
+        },
+        toastMessage: "تم إلغاء حركة صرف الراتب بنجاح",
+        toastType: "info",
+      });
+    },
+    [executeUnifiedAction, salaryPayments]
+  );
+
+  const deleteCommissionPayment = useCallback(
+    async (id: string) => {
+      const payment = commissionPayments.find(p => p.id === id);
+      if (!payment) return;
+
+      await executeUnifiedAction({
+        entityType: "commission_payment",
+        recordId: id,
+        companyId: payment.companyId,
+        action: "delete",
+        description: `إلغاء صرف عمولة للموظف: ${payment.employeeName} بقيمة ${payment.amount.toLocaleString()} ج.م`,
+        applyLocal: () => {
+          setCommissionPayments((prev) => prev.filter((p) => p.id !== id));
+        },
+        toastMessage: "تم إلغاء حركة صرف العمولة بنجاح",
+        toastType: "info",
+      });
+    },
+    [executeUnifiedAction, commissionPayments]
+  );
+
+  const addCommissionAdjustment = useCallback(
+    async (adj: Omit<CommissionAdjustment, "id" | "createdAt">) => {
+      const newAdj: CommissionAdjustment = {
+        ...adj,
+        id: `adj-${Date.now()}`,
+        createdAt: new Date().toISOString(),
+      };
+
+      await executeUnifiedAction({
+        entityType: "commission_adjustment",
+        recordId: newAdj.id,
+        companyId: newAdj.companyId,
+        action: "insert",
+        payload: newAdj,
+        description: `إضافة تسوية مالية للعمولة بقيمة ${newAdj.amount.toLocaleString()} ج.م للموظفID: ${newAdj.employeeId}`,
+        applyLocal: () => {
+          setEmployees((prev) =>
+            prev.map((emp) =>
+              emp.id === adj.employeeId
+                ? {
+                    ...emp,
+                    commissionAdjustments: [...(emp.commissionAdjustments || []), newAdj],
+                  }
+                : emp
+            )
+          );
+        },
+        toastSuccessMsg: "تم إضافة التسوية المالية للعمولة بنجاح",
+      });
+    },
+    [executeUnifiedAction]
+  );
+
+  const deleteCommissionAdjustment = useCallback(
+    async (employeeId: string, adjustmentId: string) => {
+      const emp = employees.find(e => e.id === employeeId);
+      const adj = emp?.commissionAdjustments?.find(a => a.id === adjustmentId);
+      if (!adj) return;
+
+      await executeUnifiedAction({
+        entityType: "commission_adjustment",
+        recordId: adjustmentId,
+        companyId: adj.companyId,
+        action: "delete",
+        description: `حذف تسوية عمولة بقيمة ${adj.amount.toLocaleString()} ج.م للموظف: ${emp?.name}`,
+        applyLocal: () => {
+          setEmployees((prev) =>
+            prev.map((emp) =>
+              emp.id === employeeId
+                ? {
+                    ...emp,
+                    commissionAdjustments: (emp.commissionAdjustments || []).filter((a) => a.id !== adjustmentId),
+                  }
+                : emp
+            )
+          );
+        },
+        toastMessage: "تم حذف التسوية المالية بنجاح",
+        toastType: "info",
+      });
+    },
+    [executeUnifiedAction, employees]
+  );
+
+  const updateStatementOverride = useCallback(
+    async (data: Partial<MonthlyStatement> & { employeeId: string; period: string; reason?: string }) => {
+      const emp = employees.find(e => e.id === data.employeeId);
+      if (!emp) return;
+
+      const existing = emp.monthlyStatements?.find(s => s.period === data.period);
+      
+      // Calculate history entries
+      const historyEntries: any[] = existing?.history || [];
+      const userName = currentUser?.name || "System";
+      const nowStr = new Date().toISOString();
+
+      if (data.salaryDue !== undefined && existing && data.salaryDue !== existing.salaryDue) {
+        historyEntries.push({
+          field: "salaryDue",
+          oldValue: existing.salaryDue,
+          newValue: data.salaryDue,
+          reason: data.reason || "تعديل يدوي للراتب",
+          user: userName,
+          date: nowStr
+        });
+      }
+
+      if (data.commissionEarned !== undefined && existing && data.commissionEarned !== existing.commissionEarned) {
+        historyEntries.push({
+          field: "commissionEarned",
+          oldValue: existing.commissionEarned,
+          newValue: data.commissionEarned,
+          reason: data.reason || "تعديل يدوي للعمولة",
+          user: userName,
+          date: nowStr
+        });
+      }
+
+      const stableId = existing?.id || `stmt-${data.employeeId}-${data.period}`;
+
+      const updatedPayload = {
+        ...existing,
+        ...data,
+        id: stableId,
+        history: historyEntries,
+        updatedAt: nowStr
+      };
+
+      await executeUnifiedAction({
+        entityType: "monthly_statement",
+        recordId: stableId,
+        companyId: emp.companyId,
+        action: "create", // Always use create (UPSERT) for statements
+        description: `تحديث كشف شهري للموظف: ${emp.name} للفترة ${data.period}`,
+        payload: updatedPayload,
+        applyLocal: () => {
+          setEmployees(prev => prev.map(e => {
+            if (e.id !== data.employeeId) return e;
+            const stmts = e.monthlyStatements || [];
+            const idx = stmts.findIndex(s => s.period === data.period);
+            const newStmts = [...stmts];
+            if (idx >= 0) {
+              newStmts[idx] = updatedPayload as MonthlyStatement;
+            } else {
+              newStmts.push({
+                ...updatedPayload,
+                status: 'reviewed',
+              } as MonthlyStatement);
+            }
+            return { ...e, monthlyStatements: newStmts };
+          }));
+        },
+        toastMessage: "تم تحديث الكشف المالي بنجاح",
+      });
+    },
+    [executeUnifiedAction, employees, currentUser]
+  );
+
+  const approveStatement = useCallback(
+    async (employeeId: string, period: string) => {
+      const emp = employees.find(e => e.id === employeeId);
+      const stmt = employeeStatements[employeeId]?.find(s => s.period === period);
+      if (!emp || !stmt) return;
+
+      const stableId = stmt.id || `stmt-${employeeId}-${period}`;
+
+      await executeUnifiedAction({
+        entityType: "monthly_statement",
+        recordId: stableId,
+        companyId: emp.companyId,
+        action: "create", // Always use create (UPSERT)
+        description: `اعتماد كشف عمولة ${period} للموظف: ${emp.name}`,
+        payload: {
+          ...stmt,
+          id: stableId,
+          status: 'approved',
+          approvedAt: new Date().toISOString(),
+          approvedBy: currentUser?.name || "المدير"
+        },
+        applyLocal: () => {
+          setEmployees(prev => prev.map(e => {
+            if (e.id !== employeeId) return e;
+            const stmts = (e.monthlyStatements || []).filter(s => s.period !== period);
+            return {
+              ...e,
+              monthlyStatements: [...stmts, { ...stmt, id: stableId, status: 'approved' } as MonthlyStatement]
+            };
+          }));
+        },
+        toastMessage: "تم اعتماد الكشف المالي بنجاح",
+      });
+    },
+    [executeUnifiedAction, employees, employeeStatements, currentUser]
+  );
+
+  const syncAllMonthlyStatements = useCallback(async () => {
+    if (!currentUser || !supabase) return;
+    
+    showToast("جاري مزامنة الكشوفات المالية مع السحابة للتأكد من وجود الـ 9 أشهر...", "info");
+    
+    let totalSynced = 0;
+    
+    try {
+      // Process employees in sequence to avoid hitting rate limits or causing race conditions
+      for (const emp of employees) {
+        const generated = generateEmployeeStatements(
+          emp,
+          companies,
+          contracts,
+          payments,
+          salaryPayments,
+          commissionPayments,
+          emp.commissionAdjustments || [],
+          9
+        );
+        
+        // Prepare UPSERT payload: combine generated logic with any existing persistence
+        const toUpsert = generated.map(stmt => {
+          const existing = emp.monthlyStatements?.find(s => s.period === stmt.period);
+          return {
+            ...stmt,
+            id: existing?.id || stmt.id,
+            status: existing?.status || stmt.status,
+            notes: existing?.notes || stmt.notes,
+            history: existing?.history || stmt.history,
+          };
+        });
+        
+        if (toUpsert.length > 0) {
+          // Sanitize for Supabase
+          const sanitized = toUpsert.map(s => cleanMonthlyStatement(s));
+          const { error } = await supabase.from("monthly_statements").upsert(sanitized);
+          if (!error) totalSynced += toUpsert.length;
+          else console.warn(`Failed to sync statements for ${emp.name}:`, error);
+        }
+      }
+      
+      if (totalSynced > 0) {
+        showToast(`تمت المزامنة المركزية لـ ${totalSynced} كشف مالي بنجاح`, "success");
+        fetchCloudData();
+      }
+    } catch (err) {
+      console.error("Sync error:", err);
+      showToast("فشلت المزامنة المركزية للكشوفات", "error");
+    }
+  }, [employees, companies, contracts, payments, salaryPayments, commissionPayments, currentUser, supabase, fetchCloudData]);
+
+  const recalculateStatement = useCallback(
+    async (employeeId: string, period: string) => {
+      const emp = employees.find(e => e.id === employeeId);
+      if (!emp) return;
+
+      // Generate the fresh calculated statement
+      const freshStatements = generateEmployeeStatements(
+        emp,
+        companies,
+        contracts,
+        payments,
+        salaryPayments,
+        commissionPayments,
+        emp.commissionAdjustments || [],
+        9
+      );
+      
+      const fresh = freshStatements.find(s => s.period === period);
+      if (!fresh) return;
+
+      const existing = emp.monthlyStatements?.find(s => s.period === period);
+      const stableId = existing?.id || `stmt-${employeeId}-${period}`;
+
+      const updatedPayload = {
+        ...fresh,
+        id: stableId,
+        status: existing?.status || 'calculated',
+        notes: existing?.notes || "",
+        history: existing?.history || [],
+        recalculatedAt: new Date().toISOString()
+      };
+
+      await executeUnifiedAction({
+        entityType: "monthly_statement",
+        recordId: stableId,
+        companyId: emp.companyId,
+        action: "create", // UPSERT
+        description: `إعادة حساب كشف ${period} للموظف: ${emp.name}`,
+        payload: updatedPayload,
+        applyLocal: () => {
+          setEmployees(prev => prev.map(e => {
+            if (e.id !== employeeId) return e;
+            const stmts = (e.monthlyStatements || []).filter(s => s.period !== period);
+            return {
+              ...e,
+              monthlyStatements: [...stmts, updatedPayload as MonthlyStatement]
+            };
+          }));
+        },
+        toastMessage: "تم إعادة الحساب المالي بنجاح",
+        toastType: "success"
+      });
+    },
+    [executeUnifiedAction, employees, companies, contracts, payments, salaryPayments, commissionPayments]
+  );
+
   /**
    * Unified Bulk Action Pipeline
    */
@@ -1934,6 +2699,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
     const act = params.actionType || params.action || "update";
     const ids = params.entityIds || params.items?.map((i) => i.recordId || i.id || "").filter(Boolean) || [];
     const opName = params.operationName || params.description || `عملية جماعية على ${params.entityType}`;
+
+    // RBAC Security Enforcement for Bulk Actions
+    const effCompRole = params.companyId && params.companyId !== "all" ? getUserRoleInCompany(currentUser, params.companyId) : currentCompanyRole;
+    const userIsOwner = checkIsSystemOwner(currentUser);
+    const userIsManager = checkIsCompanyManager(currentUser, effCompRole);
+
+    if (act === "delete" && !userIsManager) {
+      showToast("ليس لديك صلاحية لتنفيذ عمليات الحذف الجماعي. هذه الصلاحية مخصصة لمدير الشركة ومالك النظام فقط.", "error");
+      return null as any;
+    }
 
     if (params.applyLocal) {
       params.applyLocal();
@@ -2144,17 +2919,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
       silent: true,
     });
 
-    // Add timeline interaction
-    addInteraction({
-      customerId: newCust.id,
-      companyId: newCust.companyId,
-      type: "note",
-      date: new Date().toLocaleString("ar-EG"),
-      notes: `تم إنشاء العميل بواسطة النظام عبر (${newCust.source}) - المنطقة: ${newCust.area}`,
-      result: "عميل جديد مسجل بنجاح",
-      nextStep: newCust.nextFollowUpDate ? `متابعة محددة بتاريخ ${newCust.nextFollowUpDate}` : "تحديد موعد متابعة",
-    });
-
     return newCust;
   };
 
@@ -2311,7 +3075,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
           area: data.area || "غير محدد",
           source: data.source || "Manual",
           interestLevel: data.interestLevel || "warm",
-          stage: data.stage || "inquiry",
+          stage: "inquiry",
           notes: data.details || "",
           createdAt: todayStr,
           lastContactDate: todayStr,
@@ -2327,7 +3091,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
           area: data.area || "غير محدد",
           source: data.source || "Manual",
           interestLevel: data.interestLevel || "warm",
-          stage: data.stage || "inquiry",
+          stage: "inquiry",
           notes: data.details || "",
           nextFollowUpDate: data.nextFollowUpDate,
         });
@@ -2368,29 +3132,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
       silent: true,
     });
 
-    // Step 5: Create or Link Opportunity
-    const existingOpp = opportunities.find(
-      (o) => o.customerId === targetCustomer!.id && o.companyId === data.companyId && o.status === "open"
-    );
-    if (!existingOpp) {
-      addOpportunity({
-        companyId: data.companyId,
-        title: `فرصة بيع: ${targetCustomer!.name} - ${data.productType}`,
-        customerScope: "specific",
-        customerId: targetCustomer!.id,
-        customerName: targetCustomer!.name,
-        customerPhone: targetCustomer!.phone,
-        area: inqArea,
-        productType: data.productType,
-        expectedValue: 0,
-        stage: "qualified",
-        status: "open",
-        source: data.source,
-        temperature: data.interestLevel || "warm",
-        inquiryId: newInq.id,
-      });
-    }
-
     // Step 6: If follow-up date is provided, create the FollowUp and link it!
     if (data.nextFollowUpDate) {
       const existingFup = followUps.find(
@@ -2414,126 +3155,88 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
       }
     }
 
-    // Update customer stage if higher
+    // Update customer contact date without mutating stage
     updateCustomer(targetCustomer.id, {
-      stage: data.stage,
       lastContactDate: todayStr,
       ...(data.nextFollowUpDate ? { nextFollowUpDate: data.nextFollowUpDate } : {}),
-    });
-
-    // If inquiry stage is quotation or involves quote/dimensions, ensure it generates quotation & opportunity
-    const isQuoteInq =
-      data.stage === "quotation" ||
-      (data.details && (data.details.includes("عرض سعر") || data.details.includes("مقايسة") || data.details.includes("متر"))) ||
-      (data.productType && data.productType.includes("عرض سعر"));
-
-    if (isQuoteInq) {
-      const existingQuote = quotations.find((q) => q.customerId === targetCustomer.id && q.companyId === data.companyId);
-      if (!existingQuote) {
-        const quoteNum = generateDocNumber("Q", data.companyId, new Date().getFullYear(), quotations);
-        const newQuote: Quotation = {
-          id: crypto.randomUUID(),
-          quoteNumber: quoteNum,
-          companyId: data.companyId,
-          customerId: targetCustomer.id,
-          customerName: targetCustomer.name || "عميل",
-          customerPhone: targetCustomer.phone || "",
-          area: inqArea,
-          date: todayStr,
-          expiryDate: todayStr,
-          status: "sent",
-          items: [
-            {
-              id: "1",
-              description: data.productType || "عرض سعر مبدئي - شبابيك وأبواب UPVC",
-              quantity: 1,
-              unitPrice: 0,
-              totalPrice: 0,
-            },
-          ],
-          subtotal: 0,
-          discountTotal: 0,
-          totalAmount: 0,
-          isSummaryQuote: true,
-          summaryDescription: data.details || "طلب عرض سعر مسجل بالاستفسار",
-          notes: `مسجل من الاستفسار: ${data.details || data.productType}`,
-        };
-        executeUnifiedAction({
-          entityType: "quotation",
-          recordId: newQuote.id,
-          companyId: newQuote.companyId,
-          action: "insert",
-          payload: cleanQuotation(newQuote),
-          description: `إنشاء عرض سعر مبدئي رقم ${quoteNum} من الاستفسار`,
-          applyLocal: () => {
-            setQuotations((prev) => [newQuote, ...prev]);
-          },
-          silent: true,
-        });
-
-        // Ensure Opportunity is also created
-        const existingOpp = opportunities.find((o) => o.customerId === targetCustomer.id && o.companyId === data.companyId);
-        if (!existingOpp) {
-          const newOpp: Opportunity = {
-            id: crypto.randomUUID(),
-            companyId: data.companyId,
-            customerId: targetCustomer.id,
-            customerName: targetCustomer.name || "عميل",
-            customerPhone: targetCustomer.phone || "",
-            area: inqArea,
-            title: `فرصة ${targetCustomer.name || "عميل"} - استفسار عرض سعر`,
-            expectedValue: 0,
-            customerScope: "specific",
-            productType: data.productType || "شبابيك وأبواب UPVC",
-            stage: "quote_sent",
-            status: "open",
-            hasQuote: true,
-            quotationId: newQuote.id,
-            quotationValue: 0,
-            isQuoteSent: true,
-            hasContract: false,
-            createdAt: todayStr,
-            lastActivity: todayStr,
-            lastContactDate: todayStr,
-            nextAction: "إعداد وتدقيق عرض السعر والتواصل مع العميل",
-          };
-          executeUnifiedAction({
-            entityType: "opportunity",
-            recordId: newOpp.id,
-            companyId: newOpp.companyId,
-            action: "insert",
-            payload: newOpp,
-            description: `إنشاء فرصة جديدة من الاستفسار: ${newOpp.title}`,
-            applyLocal: () => {
-              setOpportunities((prev) => [newOpp, ...prev]);
-            },
-            silent: true,
-          });
-        }
-      }
-    }
-
-    // Add timeline interaction
-    addInteraction({
-      customerId: targetCustomer.id,
-      companyId: data.companyId,
-      type: "note",
-      date: new Date().toLocaleString("ar-EG"),
-      notes: `استفسار جديد عن ${data.productType}: ${data.details}`,
-      result: "تم تسجيل الاستفسار",
-      nextStep: data.nextFollowUpDate ? `متابعة بتاريخ ${data.nextFollowUpDate}` : "المعاينة أو تقديم عرض السعر",
     });
 
     return newInq;
   };
 
-  const updateInquiryStage = (id: string, stage: Customer["stage"]) => {
+  const updateInquiryStage = (id: string, stage: Inquiry["stage"]) => {
     const existing = inquiries.find((i) => i.id === id);
     if (!existing) return;
 
+    // Strict acceptance test synchronization: automatically close linked opportunity won/lost
+    if (stage === "contracted" || stage === "won") {
+      const opp = opportunities.find(o => (o.inquiryId === id || o.customerId === existing.customerId) && o.status === "open");
+      if (opp) {
+        closeDealWon(opp.id, { amount: opp.expectedValue || 50000, notes: "تم التعاقد والتحويل التلقائي من الاستفسار" });
+        return;
+      } else {
+        const oppId = crypto.randomUUID();
+        const newOpp: Opportunity = {
+          id: oppId,
+          companyId: existing.companyId,
+          customerId: existing.customerId,
+          customerName: existing.customerName || "عميل",
+          customerPhone: existing.customerPhone || "",
+          area: existing.area || "غير محدد",
+          title: `فرصة ${existing.customerName || "عميل"}`,
+          expectedValue: 50000,
+          customerScope: "specific",
+          productType: existing.productType || "شبابيك وأبواب UPVC",
+          stage: "qualified",
+          status: "open",
+          createdAt: todayStr,
+        };
+        // Add to state and then close as won
+        setOpportunities(prev => [newOpp, ...prev]);
+        setTimeout(() => {
+          closeDealWon(oppId, { amount: 50000, notes: "تم التعاقد والتحويل التلقائي من الاستفسار" });
+        }, 0);
+        return;
+      }
+    } else if (stage === "lost") {
+      const opp = opportunities.find(o => (o.inquiryId === id || o.customerId === existing.customerId) && o.status === "open");
+      let lossReason = "عدم اهتمام العميل";
+      const inputReason = window.prompt("الرجاء إدخال سبب خسارة الصفقة (Loss Reason):", "عدم الرد / عدم اهتمام");
+      if (inputReason !== null) {
+        lossReason = inputReason.trim() || "غير محدد";
+      }
+      if (opp) {
+        closeDealLost(opp.id, { lossReason, lossNotes: "تم إغلاق الصفقة كخسارة تلقائياً من الاستفسار" });
+        return;
+      } else {
+        const oppId = crypto.randomUUID();
+        const newOpp: Opportunity = {
+          id: oppId,
+          companyId: existing.companyId,
+          customerId: existing.customerId,
+          customerName: existing.customerName || "عميل",
+          customerPhone: existing.customerPhone || "",
+          area: existing.area || "غير محدد",
+          title: `فرصة ${existing.customerName || "عميل"}`,
+          expectedValue: 50000,
+          customerScope: "specific",
+          productType: existing.productType || "شبابيك وأبواب UPVC",
+          stage: "qualified",
+          status: "open",
+          createdAt: todayStr,
+        };
+        setOpportunities(prev => [newOpp, ...prev]);
+        setTimeout(() => {
+          closeDealLost(oppId, { lossReason, lossNotes: "تم إغلاق الصفقة كخسارة تلقائياً من الاستفسار" });
+        }, 0);
+        return;
+      }
+    }
+
     const updatedInq = { ...existing, stage, lastContactDate: todayStr };
 
-    updateCustomer(existing.customerId, { stage });
+    // Update customer last contact date without overwriting customer.stage
+    updateCustomer(existing.customerId, { lastContactDate: todayStr });
 
     if (stage === "quotation") {
       const customer = customers.find((c) => c.id === existing.customerId);
@@ -2646,7 +3349,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
     const targetInq: Inquiry = { ...existing, ...updates, lastContactDate: todayStr };
 
     if (updates.stage) {
-      updateCustomer(existing.customerId, { stage: updates.stage, lastContactDate: todayStr });
+      updateCustomer(existing.customerId, { lastContactDate: todayStr });
     }
 
     executeUnifiedAction({
@@ -2677,7 +3380,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         )
       );
       linkedCustIds.forEach((cId: string) => {
-        updateCustomer(cId, { stage: updates.stage, lastContactDate: todayStr });
+        updateCustomer(cId, { lastContactDate: todayStr });
       });
     }
 
@@ -2918,58 +3621,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         return opp;
       });
 
-      if (!matched && customer) {
-        // Auto-create Opportunity to ensure Pipeline trackability
-        const newOpp: Opportunity = {
-          id: crypto.randomUUID(),
-          companyId: data.companyId,
-          customerId: customer.id,
-          customerName: customer.name,
-          title: `فرصة ${customer.name} - عرض سعر ${quoteNum}`,
-          expectedValue: newQuote.totalAmount,
-          customerScope: "specific",
-          area: quoteArea,
-          stage: isSent ? "quote_sent" : "quotation",
-          nextAction: isSent ? "متابعة استلام ودراسة العرض مع العميل" : "إرسال عرض السعر للعميل",
-          temperature: customer.interestLevel || "warm",
-          hasQuote: true,
-          quotationId: newQuote.id,
-          quotationValue: newQuote.totalAmount,
-          isQuoteSent: isSent,
-          createdAt: todayStr,
-          lastContactDate: todayStr,
-          lastActivity: todayStr,
-          status: "open",
-        };
-        executeUnifiedAction({
-          entityType: "opportunity",
-          recordId: newOpp.id,
-          companyId: newOpp.companyId,
-          action: "insert",
-          payload: newOpp,
-          description: `إنشاء فرصة لعرض السعر رقم: ${quoteNum}`,
-          applyLocal: () => {},
-          silent: true,
-        });
-        return [newOpp, ...updated];
-      }
-
       return updated;
-    });
-
-    // Add interaction
-    const quoteDescription = newQuote.isSummaryQuote
-      ? `عرض سعر سريع (ملخص): مساحة ${newQuote.totalMeters} م² بقيمة إجمالية ${(newQuote.totalAmount || 0).toLocaleString()} ج.م (${newQuote.pricePerMeter ? `سعر المتر: ${(newQuote.pricePerMeter || 0).toLocaleString()} ج.م` : ""})`
-      : `عرض سعر تفصيلي: ${newQuote.items.length} بنود UPVC بإجمالي ${(newQuote.totalAmount || 0).toLocaleString()} ج.م (${newQuote.totalMeters} م²)`;
-
-    addInteraction({
-      customerId: data.customerId,
-      companyId: data.companyId,
-      type: "quotation",
-      date: new Date().toLocaleString("ar-EG"),
-      notes: `إنشاء عرض سعر رقم ${quoteNum} - ${quoteDescription} - المنطقة: ${quoteArea}`,
-      result: "عرض سعر جديد جاهز للإرسال",
-      nextStep: "إرسال العرض للعميل ومتابعته خلال 48 ساعة",
     });
 
     return newQuote;
@@ -3364,26 +4016,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
       lastContactDate: todayStr,
     });
 
-    // Create a pending FollowUp so it appears in FollowUpsView and MyDayView
-    const existingFup = followUps.find(
-      (f) => f.customerId === data.customerId && f.dueDate === inspDate && f.status === "pending"
-    );
-    if (!existingFup) {
-      addFollowUp({
-        companyId: data.companyId,
-        customerId: data.customerId,
-        customerName: data.customerName || customer?.name || "عميل",
-        customerPhone: data.customerPhone || customer?.phone || "",
-        dueDate: inspDate,
-        time: (data as any).time || "11:00",
-        title: `موعد معاينة: ${customer?.name || data.customerName || "عميل"}`,
-        notes: data.notes || `معاينة ورفع مقاسات الموقع (${inspArea})`,
-        status: "pending",
-        priority: "high",
-        responsible: data.surveyor || "الفريق الفني",
-      });
-    }
-
     // Update customer's open opportunity
     setOpportunities((prev) =>
       prev.map((o) => {
@@ -3398,16 +4030,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         return o;
       })
     );
-
-    addInteraction({
-      customerId: data.customerId,
-      companyId: data.companyId,
-      type: "inspection",
-      date: inspDate,
-      notes: `جدولة معاينة ورفع مقاسات: ${data.notes || "معاينة ورفع مقاسات"} مع المسؤول ${data.surveyor || "فني المعاينات"} (${inspArea})`,
-      result: "تم حجز موعد المعاينة",
-      nextStep: "النزول للموقع وتأكيد القياسات",
-    });
 
     return newInsp;
   };
@@ -3699,17 +4321,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
       })
     );
 
-    // 7. Record interaction
-    addInteraction({
-      customerId: data.customerId,
-      companyId: data.companyId,
-      type: "contract",
-      date: new Date().toLocaleString("ar-EG"),
-      notes: `تم توقيع العقد رقم ${contractNum} بناءً على عرض السعر ${quote.quoteNumber} بقيمة إجمالية ${(data.totalValue || 0).toLocaleString()} ج.م - منطقة: ${contractArea} - تاريخ العقد: ${contractDate}`,
-      result: "صفقة ناجحة وتوقيع العقد الرسمي",
-      nextStep: "تحصيل الدفعة المقدمة والبدء في أعمال التصنيع",
-    });
-
     showToast(`تم توقيع العقد بنجاح برقم ${contractNum} 📜`, "success");
     return newContract;
   };
@@ -3726,11 +4337,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
     setContracts((prev) => {
       updatedContractsList = prev.map((c) => {
         if (idSet.has(c.id)) {
-          let extra: Partial<Contract> = {};
-          if (status === "collected" || status === "closed") {
-            extra = { paidAmount: c.totalValue, remainingAmount: 0 };
-          }
-          return { ...c, collectionStatus: status, ...extra, updatedAt: new Date().toISOString() };
+          return { ...c, collectionStatus: status, updatedAt: new Date().toISOString() };
         }
         return c;
       });
@@ -3743,14 +4350,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
     ids.forEach((id) => {
       const existing = contracts.find((c) => c.id === id);
       if (existing) {
-        let extra: Partial<Contract> = {};
-        if (status === "collected" || status === "closed") {
-          extra = { paidAmount: existing.totalValue, remainingAmount: 0 };
-        }
         const updatedItem: Contract = {
           ...existing,
           collectionStatus: status,
-          ...extra,
           updatedAt: new Date().toISOString(),
         };
 
@@ -3833,13 +4435,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
     let newTotal = updates.totalValue !== undefined ? Number(updates.totalValue) : existing.totalValue;
     let newPaid = updates.paidAmount !== undefined ? Number(updates.paidAmount) : existing.paidAmount;
     let newRemaining = Math.max(0, newTotal - newPaid);
-
-    if (updates.collectionStatus === "collected" || updates.collectionStatus === "closed") {
-      newPaid = newTotal;
-      newRemaining = 0;
-      updates.paidAmount = newPaid;
-      updates.remainingAmount = newRemaining;
-    }
 
     const updatedContract: Contract = {
       ...existing,
@@ -4012,18 +4607,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
       });
     }
 
-    addInteraction({
-      customerId: data.customerId,
-      companyId: data.companyId,
-      type: "payment",
-      date: paymentDate,
-      notes: `تحصيل دفعة مالية بقيمة ${(data.amount || 0).toLocaleString()} ج.م بطريقة (${data.method}) - إيصال رقم ${newPayment.receiptNumber}`,
-      result: "تم استلام الدفعة وتحديث رصيد العقد",
-      relatedEntityType: "payment",
-      relatedEntityId: newPayment.id,
-      isSystemGenerated: true,
-    });
-
     return newPayment;
   };
 
@@ -4056,8 +4639,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
       toastType: "success",
     });
 
-    if (newAmount !== oldAmount) {
-      const diff = newAmount - oldAmount;
+    const wasActive = existing.status !== "reversed" && existing.status !== "refunded";
+    const isActive = updatedPayment.status !== "reversed" && updatedPayment.status !== "refunded";
+    let diff = 0;
+
+    if (wasActive && !isActive) {
+      diff = -oldAmount;
+    } else if (!wasActive && isActive) {
+      diff = newAmount;
+    } else if (wasActive && isActive) {
+      diff = newAmount - oldAmount;
+    }
+
+    if (diff !== 0) {
       const targetContract = contracts.find(c => c.id === existing.contractId);
       if (targetContract) {
         const newPaid = Math.max(0, targetContract.paidAmount + diff);
@@ -4071,7 +4665,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
           action: "update",
           payload: cleanContract(updatedCtr),
           previousData: targetContract,
-          description: `تعديل رصيد العقد بعد تعديل قيمة الدفعة: ${targetContract.contractNumber}`,
+          description: `تعديل رصيد العقد بعد تعديل حالة أو قيمة الدفعة: ${targetContract.contractNumber}`,
           applyLocal: () => {
             setContracts((prev) => prev.map(c => c.id === targetContract.id ? updatedCtr : c));
           },
@@ -4666,20 +5260,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
       toastType: "success",
     });
 
-    if (newSale.customerId) {
-      addInteraction({
-        customerId: newSale.customerId,
-        companyId: newSale.companyId,
-        type: "sale",
-        date: newSale.date,
-        notes: `تسجيل صفقة بيع بقيمة ${(newSale.amount || 0).toLocaleString()} ج.م - مسؤول البيع: ${newSale.responsible || "مسؤول المبيعات"}`,
-        result: "صفقة بيع مسجلة",
-        relatedEntityType: "sale",
-        relatedEntityId: saleId,
-        isSystemGenerated: true,
-      });
-    }
-
     return newSale;
   };
 
@@ -4951,6 +5531,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
     const newComp: Company = {
       ...comp,
       id: crypto.randomUUID(),
+      status: comp.status || "active",
+      active: comp.active !== false,
     };
     if (newComp.logoUrl) {
       localStorage.setItem(STORAGE_PREFIX + `comp_logo_${newComp.id}`, newComp.logoUrl);
@@ -5009,6 +5591,291 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         });
       },
       toastMessage: "تم تحديث بيانات الشركة بنجاح",
+      toastType: "success",
+    });
+  };
+
+  const archiveCompany = (id: string) => {
+    const existing = companies.find((c) => c.id === id);
+    if (!existing) return;
+    const now = new Date().toISOString();
+    const updaterName = currentUser?.name || "System Owner";
+    const updates = {
+      status: "archived" as const,
+      active: false,
+      archivedAt: now,
+      archivedBy: updaterName,
+    };
+
+    executeUnifiedAction({
+      entityType: "company",
+      recordId: id,
+      companyId: id,
+      action: "update",
+      payload: cleanCompanyUpdate(updates),
+      previousData: existing,
+      description: `أرشفة شركة: ${existing.name || id}`,
+      applyLocal: () => {
+        setCompanies((prev) => {
+          const next = prev.map((c) => (c.id === id ? { ...c, ...updates } : c));
+          localStorage.setItem(STORAGE_PREFIX + "companies", JSON.stringify(next));
+          return next;
+        });
+        if (activeCompanyId === id) {
+          setActiveCompanyId("all");
+        }
+      },
+      toastMessage: `تمت أرشفة شركة ${existing.name} بنجاح وحفظ كافة بياناتها`,
+      toastType: "info",
+    });
+  };
+
+  const restoreCompany = (id: string) => {
+    const existing = companies.find((c) => c.id === id);
+    if (!existing) return;
+    const updates = {
+      status: "active" as const,
+      active: true,
+      archivedAt: null,
+      archivedBy: null,
+    };
+
+    executeUnifiedAction({
+      entityType: "company",
+      recordId: id,
+      companyId: id,
+      action: "update",
+      payload: cleanCompanyUpdate(updates),
+      previousData: existing,
+      description: `استعادة شركة: ${existing.name || id}`,
+      applyLocal: () => {
+        setCompanies((prev) => {
+          const next = prev.map((c) => (c.id === id ? { ...c, ...updates } : c));
+          localStorage.setItem(STORAGE_PREFIX + "companies", JSON.stringify(next));
+          return next;
+        });
+      },
+      toastMessage: `تمت استعادة شركة ${existing.name} بنجاح`,
+      toastType: "success",
+    });
+  };
+
+  // Employee & Payroll Operations persistent to Supabase via executeUnifiedAction
+  const addEmployee = (empData: Omit<Employee, "id" | "createdAt">): Employee => {
+    const id = `emp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const now = new Date().toISOString().split("T")[0];
+    const initialSalRecord: EmployeeSalaryRecord = {
+      id: `sal-rec-${Date.now()}`,
+      employeeId: id,
+      companyId: empData.companyId,
+      effectiveFrom: empData.startDate ? empData.startDate.slice(0, 7) : now.slice(0, 7),
+      monthlySalary: empData.monthlySalary,
+      notes: "الراتب الأساسي المعتمد عند التعيين",
+      createdAt: now,
+    };
+    const newEmp: Employee = {
+      ...empData,
+      id,
+      salaryHistory: [initialSalRecord],
+      commissionAdjustments: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    executeUnifiedAction({
+      entityType: "employee",
+      recordId: newEmp.id,
+      companyId: newEmp.companyId,
+      action: "insert",
+      payload: cleanEmployee(newEmp),
+      description: `إضافة موظف جديد: ${newEmp.name}`,
+      applyLocal: () => {
+        setEmployees((prev) => {
+          const next = [...prev, newEmp];
+          localStorage.setItem(STORAGE_PREFIX + "employees", JSON.stringify(next));
+          return next;
+        });
+      },
+      toastMessage: `تمت إضافة الموظف ${newEmp.name} بنجاح`,
+      toastType: "success",
+    });
+
+    return newEmp;
+  };
+
+  const updateEmployee = (id: string, updates: Partial<Employee>) => {
+    const existing = employees.find((e) => e.id === id);
+    const now = new Date().toISOString();
+    const merged = { ...updates, updatedAt: now };
+
+    executeUnifiedAction({
+      entityType: "employee",
+      recordId: id,
+      companyId: existing?.companyId || "all",
+      action: "update",
+      payload: cleanEmployeeUpdate(merged),
+      previousData: existing,
+      description: `تحديث بيانات الموظف: ${existing?.name || id}`,
+      applyLocal: () => {
+        setEmployees((prev) => {
+          const next = prev.map((e) => (e.id === id ? { ...e, ...merged } : e));
+          localStorage.setItem(STORAGE_PREFIX + "employees", JSON.stringify(next));
+          return next;
+        });
+      },
+      toastMessage: "تم تحديث بيانات الموظف بنجاح",
+      toastType: "success",
+    });
+  };
+
+  const toggleEmployeeStatus = (id: string) => {
+    const existing = employees.find((e) => e.id === id);
+    if (!existing) return;
+    const nextActive = !existing.active;
+    const now = new Date().toISOString();
+
+    executeUnifiedAction({
+      entityType: "employee",
+      recordId: id,
+      companyId: existing.companyId,
+      action: "update",
+      payload: cleanEmployeeUpdate({ active: nextActive, updatedAt: now }),
+      previousData: existing,
+      description: `تعديل حالة الموظف: ${existing.name} إلى ${nextActive ? "نشط" : "معطل"}`,
+      applyLocal: () => {
+        setEmployees((prev) => {
+          const next = prev.map((e) => (e.id === id ? { ...e, active: nextActive, updatedAt: now } : e));
+          localStorage.setItem(STORAGE_PREFIX + "employees", JSON.stringify(next));
+          return next;
+        });
+      },
+      toastMessage: `تم ${nextActive ? "تنشيط" : "تعطيل"} الموظف ${existing.name}`,
+      toastType: "info",
+    });
+  };
+
+  const updateEmployeeSalary = (employeeId: string, newSalary: number, effectivePeriod: string, notes?: string) => {
+    const target = employees.find((e) => e.id === employeeId);
+    if (!target) return;
+    const now = new Date().toISOString();
+    const existingHistory = target.salaryHistory || [];
+
+    const updatedHistory = existingHistory.map((rec) => {
+      if (!rec.effectiveTo && rec.effectiveFrom < effectivePeriod) {
+        const [y, m] = effectivePeriod.split("-").map(Number);
+        const prevMonthDate = new Date(y, m - 2, 1);
+        const prevMonthStr = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, "0")}`;
+        return { ...rec, effectiveTo: prevMonthStr };
+      }
+      return rec;
+    });
+
+    const newRecord: EmployeeSalaryRecord = {
+      id: `sal-rec-${Date.now()}`,
+      employeeId,
+      companyId: target.companyId,
+      effectiveFrom: effectivePeriod,
+      monthlySalary: newSalary,
+      notes: notes || `تعديل الراتب اعتبارا من ${effectivePeriod}`,
+      createdAt: now,
+    };
+
+    const merged = {
+      monthlySalary: newSalary,
+      salaryHistory: [...updatedHistory, newRecord],
+      updatedAt: now,
+    };
+
+    executeUnifiedAction({
+      entityType: "employee",
+      recordId: employeeId,
+      companyId: target.companyId,
+      action: "update",
+      payload: cleanEmployeeUpdate(merged),
+      previousData: target,
+      description: `تحديث راتب الموظف ${target.name} إلى ${newSalary.toLocaleString()} ج.م`,
+      applyLocal: () => {
+        setEmployees((prev) => {
+          const next = prev.map((e) => (e.id === employeeId ? { ...e, ...merged } : e));
+          localStorage.setItem(STORAGE_PREFIX + "employees", JSON.stringify(next));
+          return next;
+        });
+
+        const logPayload = {
+          companyId: target.companyId,
+          description: `تعديل راتب الموظف ${target.name} من ${target.monthlySalary.toLocaleString()} إلى ${newSalary.toLocaleString()}`,
+          actionType: 'UPDATE_SALARY',
+          entityType: 'employee',
+          entityId: employeeId,
+          oldValue: target.monthlySalary,
+          newValue: newSalary
+        };
+        addAuditLog(logPayload);
+      },
+      toastMessage: `تم تحديث راتب ${target.name} بنجاح`,
+      toastType: "success",
+    });
+  };
+
+  const updateCommissionRate = (employeeId: string, newRate: number, effectivePeriod: string, notes?: string) => {
+    const target = employees.find((e) => e.id === employeeId);
+    if (!target) return;
+    const now = new Date().toISOString();
+    const existingHistory = target.commissionHistory || [];
+
+    const updatedHistory = existingHistory.map((rec) => {
+      if (!rec.effectiveTo && rec.effectiveFrom < effectivePeriod) {
+        const [y, m] = effectivePeriod.split("-").map(Number);
+        const prevMonthDate = new Date(y, m - 2, 1);
+        const prevMonthStr = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, "0")}`;
+        return { ...rec, effectiveTo: prevMonthStr };
+      }
+      return rec;
+    });
+
+    const newRecord = {
+      id: `comm-rec-${Date.now()}`,
+      employeeId,
+      companyId: target.companyId,
+      effectiveFrom: effectivePeriod,
+      percentage: newRate,
+      notes: notes || `تعديل نسبة العمولة اعتبارا من ${effectivePeriod}`,
+      createdAt: now,
+    };
+
+    const merged = {
+      commissionPercentage: newRate,
+      commissionHistory: [...updatedHistory, newRecord],
+      updatedAt: now,
+    };
+
+    executeUnifiedAction({
+      entityType: "employee",
+      recordId: employeeId,
+      companyId: target.companyId,
+      action: "update",
+      payload: cleanEmployeeUpdate(merged),
+      previousData: target,
+      description: `تحديث نسبة عمولة الموظف ${target.name} إلى ${newRate}%`,
+      applyLocal: () => {
+        setEmployees((prev) => {
+          const next = prev.map((e) => (e.id === employeeId ? { ...e, ...merged } : e));
+          localStorage.setItem(STORAGE_PREFIX + "employees", JSON.stringify(next));
+          return next;
+        });
+
+        const logPayload = {
+          companyId: target.companyId,
+          description: `تعديل نسبة عمولة الموظف ${target.name} من ${target.commissionPercentage}% إلى ${newRate}%`,
+          actionType: 'UPDATE_COMMISSION_RATE',
+          entityType: 'employee',
+          entityId: employeeId,
+          oldValue: target.commissionPercentage,
+          newValue: newRate
+        };
+        addAuditLog(logPayload);
+      },
+      toastMessage: `تم تحديث نسبة عمولة ${target.name} بنجاح`,
       toastType: "success",
     });
   };
@@ -6133,7 +7000,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
       updatedSalesList,
       followUps,
       inspections,
-      updatedInteractions
+      updatedInteractions,
+      payments
     );
 
     setCompanies(updatedCompanies);
@@ -6767,7 +7635,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         sales,
         followUps,
         inspections,
-        interactions
+        interactions,
+        payments
       );
 
       await persistReconciledData(reconciled);
@@ -7458,6 +8327,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         allCompanies: companies,
         activeCompanyId,
         setActiveCompanyId,
+        selectedCompanyIds,
+        setSelectedCompanyIds,
+        toggleCompanySelection,
+        selectAllCompanies,
+        clearAllCompanySelection,
         activeCompany,
         currentTab,
         setCurrentTab,
@@ -7498,6 +8372,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         opportunities,
         products,
         tasks,
+        employees,
+        salaryPayments,
+        commissionPayments,
+        employeeStatements,
+        reconciliationReport,
+        reconciledContracts: contracts,
 
         filteredCustomers,
         filteredInquiries,
@@ -7510,6 +8390,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         filteredOpportunities,
         filteredProducts,
         filteredTasks,
+        filteredEmployees,
+
+        // Employee & Payroll Management
+        addEmployee,
+        updateEmployee,
+        toggleEmployeeStatus,
+        updateEmployeeSalary,
+        recordSalaryPayment,
+        recordCommissionPayment,
+        deleteSalaryPayment,
+        deleteCommissionPayment,
+        addCommissionAdjustment,
+        deleteCommissionAdjustment,
+        updateStatementOverride,
+        approveStatement,
+        recalculateStatement,
+        syncAllMonthlyStatements,
+        updateCommissionRate,
 
         // Products CRUD
         addProduct,
@@ -7539,6 +8437,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         assignUserCompanyRole,
         removeUserFromCompany,
         updateUserTarget,
+        isSystemOwner,
+        isCompanyManager,
+        isEmployee,
+        canDeleteRecords,
+        canApproveRecords,
+        canManageFinance,
+        canManageSettings,
 
         // Opportunities & Deal Closing
         addOpportunity,
@@ -7559,6 +8464,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         monthlySalesTotal,
         monthlyTargetTotal,
         monthlyAchievementRate,
+        unifiedKPIs,
         quotesNeedingFollowUp,
         calculateContractedSalesTotal,
         getContractedSalesDebugReport,
@@ -7617,6 +8523,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         clearAuditLogs,
         addCompany,
         updateCompany,
+        archiveCompany,
+        restoreCompany,
         deleteCompany,
         updateCompanyTarget,
         resetDataToDefault,

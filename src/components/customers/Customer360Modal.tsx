@@ -11,6 +11,7 @@ import {
   CompanyId,
   Quotation,
   Contract,
+  InquiryStage,
 } from "../../types";
 import {
   getCustomer360Relations,
@@ -112,6 +113,7 @@ export const Customer360Modal: React.FC = () => {
     setCurrentTab,
     showToast,
     currentUser,
+    canDeleteRecords,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<
@@ -138,6 +140,7 @@ export const Customer360Modal: React.FC = () => {
   const [interactionNotes, setInteractionNotes] = useState("");
   const [interactionResult, setInteractionResult] = useState("");
   const [nextFollowUpDate, setNextFollowUpDate] = useState("");
+  const [interactionDate, setInteractionDate] = useState<string>(() => new Date().toISOString().split("T")[0]);
 
   // Quotation Form
   const [newQuoteAmount, setNewQuoteAmount] = useState<number>(35000);
@@ -162,6 +165,7 @@ export const Customer360Modal: React.FC = () => {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("bank_transfer");
   const [paymentReceiptNumber, setPaymentReceiptNumber] = useState("");
   const [paymentNotes, setPaymentNotes] = useState("");
+  const [paymentDate, setPaymentDate] = useState<string>(() => new Date().toISOString().split("T")[0]);
 
   // Inspection Form
   const [inspectionDate, setInspectionDate] = useState(
@@ -175,9 +179,18 @@ export const Customer360Modal: React.FC = () => {
   >("all");
   const [timelineSearch, setTimelineSearch] = useState("");
 
-  const customer = selectedCustomerIdFor360
+  const rawCustomer = selectedCustomerIdFor360
     ? customers.find((c) => c.id === selectedCustomerIdFor360)
     : undefined;
+
+  const isAllowedCompany = !rawCustomer ? false : (
+    !currentUser || 
+    currentUser.role === "owner" || 
+    currentUser.allowedCompanyIds.includes("all") || 
+    currentUser.allowedCompanyIds.includes(rawCustomer.companyId)
+  );
+
+  const customer = rawCustomer && isAllowedCompany ? rawCustomer : undefined;
 
   const snapshot: KPIEngineDataSnapshot = useMemo(() => {
     return {
@@ -665,8 +678,84 @@ export const Customer360Modal: React.FC = () => {
       });
     });
 
+    // Deduplicate status changes chronologically and filter out system duplicates of real entities
+    const getStageFromNotes = (notes: string): string => {
+      if (!notes) return "";
+      const normalized = notes.toLowerCase();
+      const stages = [
+        "inquiry",
+        "inspection",
+        "quotation",
+        "contracted",
+        "satisfied",
+        "qualified",
+        "needs_inspection",
+        "inspection_completed",
+        "quote_sent",
+      ];
+      for (const s of stages) {
+        if (normalized.includes(s)) return s;
+      }
+      return notes;
+    };
+
+    const statusChanges = list
+      .filter((item) => item.category === "status_change")
+      .sort((a, b) => a.rawDate - b.rawDate);
+
+    const allowedStatusChangeIds = new Set<string>();
+    let lastStage = "";
+    statusChanges.forEach((sc) => {
+      const stage = getStageFromNotes(sc.notes || "");
+      if (stage && stage !== lastStage) {
+        allowedStatusChangeIds.add(sc.id);
+        lastStage = stage;
+      }
+    });
+
+    const filteredList = list.filter((item) => {
+      // 1. If it's a status change, only allow if it represents a real transition
+      if (item.category === "status_change") {
+        return allowedStatusChangeIds.has(item.id);
+      }
+
+      // 2. Hide direct interactions that duplicate real entities
+      if (item.group === "interactions") {
+        const toHide = [
+          "inquiry",
+          "followup",
+          "quotation",
+          "inspection",
+          "contract",
+          "payment",
+          "sale",
+          "opportunity",
+        ];
+        if (toHide.includes(item.category)) {
+          return false;
+        }
+
+        // Hide system-generated notes
+        if (item.category === "note") {
+          const notesText = item.notes || "";
+          if (
+            notesText.includes("تم إنشاء العميل") ||
+            notesText.includes("استفسار جديد") ||
+            notesText.includes("جدولة معاينة") ||
+            notesText.includes("تم توقيع العقد") ||
+            notesText.includes("تحصيل دفعة مالية") ||
+            notesText.includes("تسجيل صفقة بيع")
+          ) {
+            return false;
+          }
+        }
+      }
+
+      return true;
+    });
+
     // Sort descending by rawDate, fallback to date string
-    return list.sort((a, b) => b.rawDate - a.rawDate);
+    return filteredList.sort((a, b) => b.rawDate - a.rawDate);
   }, [
     customerInteractions,
     customerInquiries,
@@ -710,6 +799,7 @@ export const Customer360Modal: React.FC = () => {
   };
 
   const handleStageChange = (newStage: CustomerStage) => {
+    if (newStage === customer.stage) return;
     updateCustomer(customer.id, { stage: newStage });
     addInteraction({
       customerId: customer.id,
@@ -729,7 +819,7 @@ export const Customer360Modal: React.FC = () => {
       customerId: customer.id,
       companyId: customer.companyId,
       type: interactionType,
-      date: new Date().toLocaleString("ar-EG"),
+      date: interactionDate,
       notes: interactionNotes,
       result: interactionResult || "تم التدوين بنجاح",
       nextStep: nextFollowUpDate ? `متابعة بتاريخ ${nextFollowUpDate}` : undefined,
@@ -864,7 +954,7 @@ export const Customer360Modal: React.FC = () => {
       customerName: customer.name,
       contractId: paymentTargetContractId,
       amount: amt,
-      date: todayStr,
+      date: paymentDate,
       method: paymentMethod,
       receiptNumber: paymentReceiptNumber || undefined,
       notes: paymentNotes || "تحصيل مسجل عبر بطاقة العميل 360",
@@ -1257,7 +1347,7 @@ export const Customer360Modal: React.FC = () => {
               </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <div className="space-y-1">
                 <label className="font-semibold text-[#A1A1AA]">نوع التفاعل:</label>
                 <select
@@ -1270,6 +1360,17 @@ export const Customer360Modal: React.FC = () => {
                   <option value="inspection">🏠 معاينة ومقاسات</option>
                   <option value="note">📝 ملاحظة سريعة</option>
                 </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-[#A1A1AA]">تاريخ التفاعل *:</label>
+                <input
+                  type="date"
+                  required
+                  value={interactionDate}
+                  onChange={(e) => setInteractionDate(e.target.value)}
+                  className="w-full p-2 bg-[#202225] border border-[#292B2E] text-[#EDEDED] rounded-lg font-bold"
+                />
               </div>
 
               <div className="space-y-1">
@@ -1293,7 +1394,7 @@ export const Customer360Modal: React.FC = () => {
                 />
               </div>
 
-              <div className="col-span-1 sm:col-span-3 space-y-1">
+              <div className="col-span-1 sm:col-span-2 lg:col-span-4 space-y-1">
                 <label className="font-semibold text-[#A1A1AA]">تفاصيل ما دار:</label>
                 <textarea
                   rows={2}
@@ -1569,6 +1670,17 @@ export const Customer360Modal: React.FC = () => {
                     </option>
                   ))}
                 </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-[#A1A1AA]">تاريخ الدفعة *:</label>
+                <input
+                  type="date"
+                  required
+                  value={paymentDate}
+                  onChange={(e) => setPaymentDate(e.target.value)}
+                  className="w-full p-2 bg-[#202225] border border-[#292B2E] text-[#EDEDED] rounded-lg font-bold"
+                />
               </div>
 
               <div className="space-y-1">
@@ -2288,17 +2400,19 @@ export const Customer360Modal: React.FC = () => {
                           <span>طباعة</span>
                         </button>
 
-                        <button
-                          onClick={() => {
-                            if (confirm(`هل أنت متأكد من حذف عرض السعر رقم ${q.quoteNumber}؟`)) {
-                              deleteQuotation(q.id);
-                            }
-                          }}
-                          className="p-1.5 text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 rounded-xl transition-colors cursor-pointer"
-                          title="حذف عرض السعر"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {canDeleteRecords && (
+                          <button
+                            onClick={() => {
+                              if (confirm(`هل أنت متأكد من حذف عرض السعر رقم ${q.quoteNumber}؟`)) {
+                                deleteQuotation(q.id);
+                              }
+                            }}
+                            className="p-1.5 text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 rounded-xl transition-colors cursor-pointer"
+                            title="حذف عرض السعر"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -2383,17 +2497,19 @@ export const Customer360Modal: React.FC = () => {
                           <span>تحصيل دفعة</span>
                         </button>
 
-                        <button
-                          onClick={() => {
-                            if (confirm(`هل أنت متأكد من حذف العقد رقم ${c.contractNumber}؟`)) {
-                              deleteContract(c.id);
-                            }
-                          }}
-                          className="p-1.5 text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 rounded-lg transition-colors cursor-pointer"
-                          title="حذف العقد"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {canDeleteRecords && (
+                          <button
+                            onClick={() => {
+                              if (confirm(`هل أنت متأكد من حذف العقد رقم ${c.contractNumber}؟`)) {
+                                deleteContract(c.id);
+                              }
+                            }}
+                            className="p-1.5 text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 rounded-lg transition-colors cursor-pointer"
+                            title="حذف العقد"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                     </div>
 
@@ -2501,17 +2617,19 @@ export const Customer360Modal: React.FC = () => {
                                   </span>
                                 )}
                               </div>
-                              <button
-                                onClick={() => {
-                                  if (confirm(`هل أنت متأكد من حذف هذا التحصيل بقيمة ${p.amount.toLocaleString()} ج.م؟`)) {
-                                    deletePayment(p.id);
-                                  }
-                                }}
-                                className="p-1 text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 rounded cursor-pointer"
-                                title="حذف الدفعة"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
+                              {canDeleteRecords && (
+                                <button
+                                  onClick={() => {
+                                    if (confirm(`هل أنت متأكد من حذف هذا التحصيل بقيمة ${p.amount.toLocaleString()} ج.م؟`)) {
+                                      deletePayment(p.id);
+                                    }
+                                  }}
+                                  className="p-1 text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 rounded cursor-pointer"
+                                  title="حذف الدفعة"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
                             </div>
                           ))}
                         </div>
@@ -2593,11 +2711,27 @@ export const Customer360Modal: React.FC = () => {
               {customerInquiries.map((inq) => (
                 <div
                   key={inq.id}
-                  className="bg-[#18191B] rounded-2xl border border-[#292B2E] p-4 shadow-2xs space-y-1.5"
+                  className="bg-[#18191B] rounded-2xl border border-[#292B2E] p-4 shadow-2xs space-y-2"
                 >
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
                     <span className="font-bold text-xs text-[#EDEDED]">{inq.productType}</span>
-                    <span className="text-[11px] text-[#6B7280]">{inq.date}</span>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={inq.stage || "new"}
+                        onChange={(e) => updateInquiry(inq.id, { stage: e.target.value as InquiryStage })}
+                        className="bg-[#202225] border border-[#292B2E] text-[#EDEDED] text-[11px] px-2 py-0.5 rounded-lg font-bold cursor-pointer"
+                      >
+                        <option value="new">جديد (New)</option>
+                        <option value="contacted">تم التواصل (Contacted)</option>
+                        <option value="qualified">مؤهل (Qualified)</option>
+                        <option value="converted">محول لفرصة/عرض (Converted)</option>
+                        <option value="not_qualified">غير مؤهل (Not Qualified)</option>
+                        <option value="not_interested">غير مهتم (Not Interested)</option>
+                        <option value="no_response">لا يوجد رد (No Response)</option>
+                        <option value="closed">مغلق (Closed)</option>
+                      </select>
+                      <span className="text-[11px] text-[#6B7280]">{inq.date}</span>
+                    </div>
                   </div>
                   <p className="text-xs text-[#A1A1AA]">{inq.details}</p>
                 </div>

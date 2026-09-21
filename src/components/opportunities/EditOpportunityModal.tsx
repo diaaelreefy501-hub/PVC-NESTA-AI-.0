@@ -127,6 +127,11 @@ export const EditOpportunityModal: React.FC<EditOpportunityModalProps> = ({
       return;
     }
 
+    if (status === "lost" && !lossReason.trim()) {
+      showToast("يرجى اختيار سبب خسارة الصفقة إجبارياً للتحليل المؤسسي", "warning");
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {

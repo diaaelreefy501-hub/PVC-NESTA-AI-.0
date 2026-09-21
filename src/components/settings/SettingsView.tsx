@@ -45,10 +45,12 @@ import { supabase } from "../../integrations/supabase/client";
 import { AppUser, Company, CompanyId, CompanyRole, Product } from "../../types";
 import { CompanyLogo } from "../common/CompanyLogo";
 import { PersistenceSyncCenter } from "./PersistenceSyncCenter";
+import { CompaniesView } from "../companies/CompaniesView";
 
 export const SettingsView: React.FC = () => {
   const {
     companies,
+    allCompanies,
     addCompany,
     updateCompany,
     deleteCompany,
@@ -108,12 +110,19 @@ export const SettingsView: React.FC = () => {
     name: "",
     nameEn: "",
     phone: "",
+    email: "",
     monthlyTarget: 300000,
     annualTarget: 3600000,
     color: "#C8A75A",
     secondaryColor: "#111111",
     logoUrl: "",
+    commissionTiming: "contract_signing" as "contract_signing" | "down_payment" | "full_collection" | "custom",
+    commissionRate: 2.5,
+    employeeAllocationRatio: 50,
+    monthlyAdvertisingBudget: 25000,
   });
+
+  const [showArchivedFilter, setShowArchivedFilter] = useState(false);
 
   const [editingTargets, setEditingTargets] = useState<Record<string, number>>(() => {
     const initial: Record<string, number> = {};
@@ -151,6 +160,7 @@ export const SettingsView: React.FC = () => {
       name: companyForm.name.trim(),
       nameEn: companyForm.nameEn.trim() || undefined,
       phone: companyForm.phone.trim(),
+      email: companyForm.email.trim() || undefined,
       monthlyTarget: companyForm.monthlyTarget || 300000,
       annualTarget: companyForm.annualTarget || 3600000,
       color: companyForm.color,
@@ -162,6 +172,10 @@ export const SettingsView: React.FC = () => {
       logoUrl: companyForm.logoUrl || undefined,
       userRoles: currentUser ? { [currentUser.id]: "owner" } : {},
       userTargets: {},
+      commissionTiming: companyForm.commissionTiming,
+      commissionRate: companyForm.commissionRate,
+      employeeAllocationRatio: companyForm.employeeAllocationRatio,
+      monthlyAdvertisingBudget: companyForm.monthlyAdvertisingBudget,
     });
 
     setShowAddCompanyModal(false);
@@ -169,11 +183,16 @@ export const SettingsView: React.FC = () => {
       name: "",
       nameEn: "",
       phone: "",
+      email: "",
       monthlyTarget: 300000,
       annualTarget: 3600000,
       color: "#C8A75A",
       secondaryColor: "#111111",
       logoUrl: "",
+      commissionTiming: "contract_signing",
+      commissionRate: 2.5,
+      employeeAllocationRatio: 50,
+      monthlyAdvertisingBudget: 25000,
     });
     showToast("تم إنشاء الشركة بنجاح", "success");
   };
@@ -187,11 +206,16 @@ export const SettingsView: React.FC = () => {
       name: companyForm.name.trim(),
       nameEn: companyForm.nameEn.trim() || undefined,
       phone: companyForm.phone.trim(),
+      email: companyForm.email.trim() || undefined,
       monthlyTarget: companyForm.monthlyTarget,
       annualTarget: companyForm.annualTarget,
       color: companyForm.color,
       secondaryColor: companyForm.secondaryColor,
       logoUrl: companyForm.logoUrl || undefined,
+      commissionTiming: companyForm.commissionTiming,
+      commissionRate: companyForm.commissionRate,
+      employeeAllocationRatio: companyForm.employeeAllocationRatio,
+      monthlyAdvertisingBudget: companyForm.monthlyAdvertisingBudget,
     });
 
     setEditingCompany(null);
@@ -199,9 +223,37 @@ export const SettingsView: React.FC = () => {
   };
 
   const handleToggleCompanyStatus = (company: Company) => {
-    const nextStatus = !company.active;
-    updateCompany(company.id, { active: nextStatus });
-    showToast(nextStatus ? `تم تفعيل شركة ${company.name}` : `تم أرشفة/تعطيل شركة ${company.name}`, "info");
+    const nextActive = !company.active;
+
+    if (!nextActive) {
+      // Safety Check: Check for active contracts and open inquiries
+      const activeContracts = contracts.filter(
+        (c) => c.companyId === company.id && c.recordStatus !== "duplicate" && c.recordStatus !== "excluded" && c.status === "active"
+      );
+      const openInquiries = inquiries.filter(
+        (i) => i.companyId === company.id && i.recordStatus !== "duplicate" && i.recordStatus !== "excluded" && i.status !== "lost" && i.status !== "won" && i.status !== "contracted"
+      );
+
+      if (activeContracts.length > 0 || openInquiries.length > 0) {
+        const details = [
+          activeContracts.length > 0 ? `عقود نشطة (${activeContracts.length})` : "",
+          openInquiries.length > 0 ? `استفسارات مفتوحة (${openInquiries.length})` : ""
+        ].filter(Boolean).join(" و ");
+        showToast(`⚠️ لا يمكن أرشفة شركة ${company.name} بسبب وجود ${details}! يرجى تسويتها أو نقلها أولاً.`, "warning");
+        return;
+      }
+    }
+
+    updateCompany(company.id, {
+      active: nextActive,
+      status: nextActive ? "active" : "archived",
+    });
+    showToast(
+      nextActive
+        ? `تم استعادة وتفعيل شركة ${company.name} بنجاح ✅`
+        : `تم أرشفة شركة ${company.name} بنجاح (كافة العقود والسجلات محفوظة بدون حذف)`,
+      "info"
+    );
   };
 
   /* =========================================================================
@@ -616,301 +668,7 @@ export const SettingsView: React.FC = () => {
          ========================================================================= */}
       {activeTab === "companies" && (
         <div className="space-y-6">
-          {/* Top Actions & Target Overview */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#18191B] border border-[#292B2E] p-4 rounded-2xl">
-            <div>
-              <h3 className="text-sm font-bold text-[#EDEDED] flex items-center gap-2">
-                <Building2 className="w-4 h-4 text-[#C8A75A]" />
-                <span>إدارة الشركات وتحديد الأهداف البيعية الشهرية</span>
-              </h3>
-              <p className="text-xs text-[#A1A1AA] mt-0.5">
-                يمكن لمالك النظام إضافة وتعديل وأرشفة الشركات وتحديد المستهدفات التقديرية
-              </p>
-            </div>
-            <button
-              onClick={() => setShowAddCompanyModal(true)}
-              className="px-4 py-2 bg-[#C8A75A] text-slate-950 text-xs font-bold rounded-xl flex items-center gap-1.5 hover:bg-[#dfba66] transition-all cursor-pointer shadow-xs self-start sm:self-auto"
-            >
-              <Plus className="w-4 h-4" />
-              <span>إضافة شركة جديدة</span>
-            </button>
-          </div>
-
-          {/* Companies Cards Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {companies.map((comp) => {
-              const compSales = sales
-                .filter((s) => s.companyId === comp.id)
-                .reduce((acc, s) => acc + s.amount, 0);
-              const currentTarget = editingTargets[comp.id] ?? comp.monthlyTarget;
-              const rate = currentTarget > 0 ? Math.round((compSales / currentTarget) * 100) : 0;
-              const isSaved = savedStatus[comp.id];
-
-              return (
-                <div
-                  key={comp.id}
-                  className="bg-[#18191B] border border-[#292B2E] hover:border-[#3E4247] rounded-2xl p-5 space-y-4 relative overflow-hidden transition-all shadow-sm"
-                >
-                  {/* Top Color Accent */}
-                  <div
-                    className="absolute top-0 right-0 left-0 h-1.5"
-                    style={{ backgroundColor: comp.color || "#C8A75A" }}
-                  />
-
-                  {/* Company Header */}
-                  <div className="flex items-start justify-between gap-3 pt-1">
-                    <div className="flex items-center gap-3">
-                      <CompanyLogo company={comp} size="md" />
-                      <div>
-                        <h4 className="text-sm font-bold text-[#EDEDED]">{comp.name}</h4>
-                        <div className="text-[11px] text-[#A1A1AA] flex items-center gap-1 mt-0.5">
-                          <span>{comp.nameEn || "Company"}</span>
-                          <span>•</span>
-                          <span>{comp.phone || "بدون هاتف"}</span>
-                        </div>
-                      </div>
-                    </div>
-                    <span
-                      className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
-                        comp.active !== false
-                          ? "bg-emerald-950/70 text-emerald-400 border border-emerald-800/40"
-                          : "bg-rose-950/70 text-rose-400 border border-rose-800/40"
-                      }`}
-                    >
-                      {comp.active !== false ? "نشطة" : "مؤرشفة"}
-                    </span>
-                  </div>
-
-                  {/* Target & Sales Bar */}
-                  <div className="bg-[#202225] p-3 rounded-xl space-y-2 border border-[#292B2E]">
-                    <div className="flex justify-between text-xs">
-                      <span className="text-[#A1A1AA]">المبيعات المحققة:</span>
-                      <strong className="text-emerald-400 font-mono">
-                        {compSales.toLocaleString()} ج.م
-                      </strong>
-                    </div>
-                    <div className="flex justify-between text-xs">
-                      <span className="text-[#A1A1AA]">الهدف المستهدف:</span>
-                      <strong className="text-[#EDEDED] font-mono">
-                        {currentTarget.toLocaleString()} ج.م
-                      </strong>
-                    </div>
-                    <div className="w-full h-1.5 bg-[#18191B] rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all duration-500"
-                        style={{
-                          width: `${Math.min(100, rate)}%`,
-                          backgroundColor: comp.color || "#C8A75A",
-                        }}
-                      />
-                    </div>
-                    <div className="text-left text-[10px] text-[#C8A75A] font-bold">
-                      نسبة الإنجاز: {rate}%
-                    </div>
-                  </div>
-
-                  {/* Target Editor Input */}
-                  <div className="space-y-1.5">
-                    <label className="block text-[11px] text-[#A1A1AA]">
-                      تعديل الهدف البيعي الشهري:
-                    </label>
-                    <div className="relative">
-                      <input
-                        type="number"
-                        step={10000}
-                        value={currentTarget}
-                        onChange={(e) => handleTargetChange(comp.id, Number(e.target.value))}
-                        className="w-full pl-10 pr-3 py-1.5 bg-[#202225] text-[#EDEDED] font-mono font-bold text-xs rounded-xl border border-[#292B2E] focus:border-[#C8A75A] outline-hidden"
-                      />
-                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] text-[#A1A1AA]">
-                        ج.م
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Save Target Button */}
-                  <button
-                    onClick={() => handleSaveTarget(comp.id)}
-                    className={`w-full py-1.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                      isSaved
-                        ? "bg-emerald-600 text-white"
-                        : "bg-[#202225] hover:bg-[#292B2E] text-[#C8A75A] border border-[#292B2E]"
-                    }`}
-                  >
-                    {isSaved ? (
-                      <>
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>تم الحفظ ✓</span>
-                      </>
-                    ) : (
-                      <>
-                        <Save className="w-3.5 h-3.5" />
-                        <span>حفظ الهدف</span>
-                      </>
-                    )}
-                  </button>
-
-                  {/* Action Buttons: Edit, Toggle Status */}
-                  <div className="flex items-center gap-2 pt-1 border-t border-[#292B2E]">
-                    <button
-                      onClick={() => {
-                        setEditingCompany(comp);
-                        setCompanyForm({
-                          name: comp.name,
-                          nameEn: comp.nameEn || "",
-                          phone: comp.phone || "",
-                          monthlyTarget: comp.monthlyTarget || 300000,
-                          annualTarget: comp.annualTarget || 3600000,
-                          color: comp.color || "#C8A75A",
-                          secondaryColor: comp.secondaryColor || "#111111",
-                          logoUrl: comp.logoUrl || "",
-                        });
-                      }}
-                      className="flex-1 py-1.5 px-2 bg-[#202225] hover:bg-[#292B2E] text-[#EDEDED] text-xs font-semibold rounded-lg border border-[#292B2E] flex items-center justify-center gap-1 transition-all cursor-pointer"
-                    >
-                      <Edit2 className="w-3 h-3 text-[#C8A75A]" />
-                      <span>تعديل البيانات</span>
-                    </button>
-                    <button
-                      onClick={() => handleToggleCompanyStatus(comp)}
-                      className={`py-1.5 px-2.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
-                        comp.active !== false
-                          ? "text-amber-400 border-amber-800/40 bg-amber-950/30 hover:bg-amber-950/60"
-                          : "text-emerald-400 border-emerald-800/40 bg-emerald-950/30 hover:bg-emerald-950/60"
-                      }`}
-                    >
-                      {comp.active !== false ? "أرشفة" : "تفعيل"}
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Add / Edit Company Modal */}
-          {(showAddCompanyModal || editingCompany) && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-              <div className="bg-[#18191B] border border-[#292B2E] rounded-2xl p-6 w-full max-w-lg space-y-4 shadow-2xl">
-                <div className="flex items-center justify-between border-b border-[#292B2E] pb-3">
-                  <h3 className="font-bold text-base text-[#EDEDED] flex items-center gap-2">
-                    <Building2 className="w-5 h-5 text-[#C8A75A]" />
-                    <span>{editingCompany ? "تعديل بيانات الشركة" : "إضافة شركة ومؤسسة جديدة"}</span>
-                  </h3>
-                  <button
-                    onClick={() => {
-                      setShowAddCompanyModal(false);
-                      setEditingCompany(null);
-                    }}
-                    className="p-1 rounded-lg text-[#A1A1AA] hover:text-white hover:bg-[#202225]"
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
-                </div>
-
-                <form
-                  onSubmit={editingCompany ? handleUpdateCompany : handleCreateCompany}
-                  className="space-y-4 text-xs"
-                >
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[#A1A1AA] mb-1">اسم الشركة (عربي) *</label>
-                      <input
-                        type="text"
-                        required
-                        value={companyForm.name}
-                        onChange={(e) => setCompanyForm({ ...companyForm, name: e.target.value })}
-                        className="w-full p-2.5 bg-[#202225] border border-[#292B2E] rounded-xl text-[#EDEDED] outline-hidden focus:border-[#C8A75A]"
-                        placeholder="مثال: نيوهاوس للقطاعات"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[#A1A1AA] mb-1">اسم الشركة (إنجليزي)</label>
-                      <input
-                        type="text"
-                        value={companyForm.nameEn}
-                        onChange={(e) => setCompanyForm({ ...companyForm, nameEn: e.target.value })}
-                        className="w-full p-2.5 bg-[#202225] border border-[#292B2E] rounded-xl text-[#EDEDED] outline-hidden focus:border-[#C8A75A]"
-                        placeholder="e.g. NewHouse UPVC"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[#A1A1AA] mb-1">رقم الهاتف / التواصل</label>
-                      <input
-                        type="text"
-                        value={companyForm.phone}
-                        onChange={(e) => setCompanyForm({ ...companyForm, phone: e.target.value })}
-                        className="w-full p-2.5 bg-[#202225] border border-[#292B2E] rounded-xl text-[#EDEDED] outline-hidden focus:border-[#C8A75A]"
-                        placeholder="010XXXXXXXX"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[#A1A1AA] mb-1">الهدف البيعي الشهري (ج.م)</label>
-                      <input
-                        type="number"
-                        value={companyForm.monthlyTarget}
-                        onChange={(e) =>
-                          setCompanyForm({ ...companyForm, monthlyTarget: Number(e.target.value) })
-                        }
-                        className="w-full p-2.5 bg-[#202225] border border-[#292B2E] rounded-xl text-[#EDEDED] outline-hidden focus:border-[#C8A75A]"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[#A1A1AA] mb-1">اللون الأساسي للعلامة</label>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="color"
-                          value={companyForm.color}
-                          onChange={(e) => setCompanyForm({ ...companyForm, color: e.target.value })}
-                          className="w-10 h-10 rounded-lg bg-transparent border border-[#292B2E] cursor-pointer"
-                        />
-                        <input
-                          type="text"
-                          value={companyForm.color}
-                          onChange={(e) => setCompanyForm({ ...companyForm, color: e.target.value })}
-                          className="flex-1 p-2 bg-[#202225] border border-[#292B2E] rounded-xl text-[#EDEDED]"
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-[#A1A1AA] mb-1">رابط الشعار (Logo URL)</label>
-                      <input
-                        type="text"
-                        value={companyForm.logoUrl}
-                        onChange={(e) => setCompanyForm({ ...companyForm, logoUrl: e.target.value })}
-                        className="w-full p-2.5 bg-[#202225] border border-[#292B2E] rounded-xl text-[#EDEDED] outline-hidden focus:border-[#C8A75A]"
-                        placeholder="https://..."
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex gap-2 pt-3 border-t border-[#292B2E]">
-                    <button
-                      type="submit"
-                      className="flex-1 bg-[#C8A75A] text-slate-950 font-bold py-2.5 rounded-xl hover:bg-[#dfba66] transition-all cursor-pointer shadow-xs"
-                    >
-                      {editingCompany ? "حفظ التعديلات" : "إنشاء الشركة الآن"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowAddCompanyModal(false);
-                        setEditingCompany(null);
-                      }}
-                      className="px-5 bg-[#202225] text-[#A1A1AA] hover:text-white rounded-xl border border-[#292B2E]"
-                    >
-                      إلغاء
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </div>
-          )}
+          <CompaniesView />
         </div>
       )}
 

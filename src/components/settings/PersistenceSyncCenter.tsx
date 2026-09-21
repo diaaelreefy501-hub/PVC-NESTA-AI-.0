@@ -174,6 +174,7 @@ export const PersistenceSyncCenter: React.FC = () => {
       followup: "متابعة",
       inspection: "معاينة",
       company: "شركة",
+      employee: "موظف",
       user: "مستخدم",
       product: "منتج",
       interaction: "تواصل",
@@ -181,6 +182,11 @@ export const PersistenceSyncCenter: React.FC = () => {
       bulk_operation: "عملية جماعية",
       import_operation: "استيراد بيانات",
       system_operation: "عملية نظام",
+      audit_log: "سجل عمليات",
+      commission_adjustment: "تسوية عمولة",
+      monthly_statement: "كشف شهري",
+      salary_payment: "صرف راتب",
+      commission_payment: "صرف عمولة",
     };
     return map[type] || type;
   };

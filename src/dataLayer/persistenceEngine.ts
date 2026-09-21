@@ -15,6 +15,13 @@ import {
   cleanCompany,
   cleanCompanyUpdate,
   cleanInteraction,
+  cleanEmployee,
+  cleanEmployeeUpdate,
+  cleanCommissionAdjustment,
+  cleanAuditLog,
+  cleanSalaryPayment,
+  cleanCommissionPayment,
+  cleanMonthlyStatement,
 } from "../integrations/supabase/sanitizer";
 
 export type EntityType =
@@ -28,10 +35,16 @@ export type EntityType =
   | "followup"
   | "inspection"
   | "company"
+  | "employee"
   | "user"
   | "product"
   | "interaction"
   | "task"
+  | "audit_log"
+  | "commission_adjustment"
+  | "salary_payment"
+  | "commission_payment"
+  | "monthly_statement"
   | "bulk_operation"
   | "import_operation"
   | "system_operation";
@@ -238,10 +251,16 @@ export class PersistenceEngine {
       followup: "المتابعة",
       inspection: "المعاينة",
       company: "الشركة",
+      employee: "الموظف",
       user: "المستخدم",
       product: "المنتج",
       interaction: "سجل التواصل",
       task: "المهمة",
+      audit_log: "سجل التدقيق",
+      commission_adjustment: "تسوية عمولة",
+      salary_payment: "صرف راتب",
+      commission_payment: "صرف عمولة",
+      monthly_statement: "كشف عمولات شهري",
       bulk_operation: "عملية مجمعة",
       import_operation: "استيراد بيانات",
       system_operation: "إجراء نظام",
@@ -678,8 +697,20 @@ export class PersistenceEngine {
         return action === "insert" ? cleanInspection(payload) : cleanInspectionUpdate(payload);
       case "company":
         return action === "insert" ? cleanCompany(payload) : cleanCompanyUpdate(payload);
+      case "employee":
+        return action === "insert" ? cleanEmployee(payload) : cleanEmployeeUpdate(payload);
       case "interaction":
         return cleanInteraction(payload);
+      case "commission_adjustment":
+        return cleanCommissionAdjustment(payload);
+      case "audit_log":
+        return cleanAuditLog(payload);
+      case "salary_payment":
+        return cleanSalaryPayment(payload);
+      case "commission_payment":
+        return cleanCommissionPayment(payload);
+      case "monthly_statement":
+        return cleanMonthlyStatement(payload);
       default:
         return payload;
     }
@@ -705,8 +736,20 @@ export class PersistenceEngine {
         return "inspections";
       case "company":
         return "companies";
+      case "employee":
+        return "employees";
       case "interaction":
         return "interactions";
+      case "commission_adjustment":
+        return "commission_adjustments";
+      case "audit_log":
+        return "audit_logs";
+      case "salary_payment":
+        return "salary_payments";
+      case "commission_payment":
+        return "commission_payments";
+      case "monthly_statement":
+        return "monthly_statements";
       case "opportunity":
         return "interactions"; // Opportunities are synced as opportunity_sync in interactions
       case "product":
@@ -830,8 +873,9 @@ export class PersistenceEngine {
           .maybeSingle();
 
         if (readErr && readErr.code !== "PGRST205") {
+          console.error(`[Read-back Error] ${table} ID ${change.recordId}:`, readErr);
           this.markChangeVerificationFailed(change.id, `فشل التحقق: خطأ قراءة السجل من السحابة (${readErr.message})`);
-          return { success: false, message: "فشل التحقق من القراءة السحابية" };
+          return { success: false, message: "فشل التحقق من القراءة السحابية - راجع الـ Console" };
         }
 
         if (!readBack) {
@@ -876,8 +920,9 @@ export class PersistenceEngine {
           .maybeSingle();
 
         if (readErr && readErr.code !== "PGRST205") {
+          console.error(`[Read-back Error] ${table} ID ${change.recordId}:`, readErr);
           this.markChangeVerificationFailed(change.id, `فشل التحقق: خطأ قراءة السجل بعد التعديل (${readErr.message})`);
-          return { success: false, message: "فشل التحقق من القراءة السحابية" };
+          return { success: false, message: "فشل التحقق من القراءة السحابية - راجع الـ Console" };
         }
 
         if (!readBack) {

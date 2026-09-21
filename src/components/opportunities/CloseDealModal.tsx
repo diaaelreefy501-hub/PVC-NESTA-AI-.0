@@ -76,6 +76,11 @@ export const CloseDealModal: React.FC<CloseDealModalProps> = ({
 
     try {
       if (closeType === "won") {
+        if (opportunity.status === "won") {
+          setErrorMsg("هذه الصفقة مسجلة بالفعل كصفقة رابحة (Won) وتم ربطها بالعقد/المبيعات");
+          setIsSubmitting(false);
+          return;
+        }
         if (dealAmount <= 0) {
           setErrorMsg("يرجى إدخال قيمة صحيحة للصفقة");
           setIsSubmitting(false);
@@ -237,6 +242,18 @@ export const CloseDealModal: React.FC<CloseDealModalProps> = ({
           {/* Won Mode Form */}
           {closeType === "won" && (
             <div className="space-y-4 animate-in fade-in">
+              {opportunity.status === "won" && (
+                <div className="p-4 bg-amber-950/40 border border-amber-800/40 rounded-2xl flex items-start gap-3 text-amber-300">
+                  <CheckCircle2 className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                  <div className="space-y-1 text-xs">
+                    <h4 className="font-bold text-sm text-amber-200">هذه الفرصة مغلقة بالفعل كصفقة رابحة (Won)</h4>
+                    <p className="text-amber-400/90 leading-relaxed">
+                      تم تسجيل البيع وحفظ حالة الفوز في النظام بالفعل. لا يمكن تكرار تأكيد التعاقد لنفس السجل لمنع ازدواجية المبيعات والعمولات.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               <div className="p-4 bg-emerald-950/40 border border-emerald-800/40 rounded-2xl space-y-1">
                 <div className="flex items-center gap-2 text-emerald-400 font-bold">
                   <CheckCircle2 className="w-4 h-4 text-emerald-400" />
@@ -378,16 +395,22 @@ export const CloseDealModal: React.FC<CloseDealModalProps> = ({
             </button>
             <button
               type="submit"
-              disabled={isSubmitting}
+              disabled={isSubmitting || (closeType === "won" && opportunity.status === "won")}
               className={`px-6 py-2.5 rounded-xl font-bold text-white shadow-md transition-all ${
-                isSubmitting ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+                isSubmitting || (closeType === "won" && opportunity.status === "won") ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
               } ${
                 closeType === "won"
                   ? "bg-emerald-600 hover:bg-emerald-500"
                   : "bg-rose-600 hover:bg-rose-500"
               }`}
             >
-              {isSubmitting ? "جاري الإغلاق..." : closeType === "won" ? "تأكيد التعاقد (Won)" : "تأكيد الإغلاق كخسارة (Lost)"}
+              {isSubmitting
+                ? "جاري الإغلاق..."
+                : closeType === "won"
+                ? opportunity.status === "won"
+                  ? "الصفقة معتمدة كـ Won مسبقاً"
+                  : "تأكيد التعاقد (Won)"
+                : "تأكيد الإغلاق كخسارة (Lost)"}
             </button>
           </div>
         </form>

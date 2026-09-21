@@ -3,6 +3,7 @@ import { useApp } from "../../context/AppContext";
 import { Company } from "../../types";
 import { CompanyLogo } from "../common/CompanyLogo";
 import { GlobalFilterBar } from "../common/GlobalFilterBar";
+import { CompaniesView } from "./CompaniesView";
 import {
   computeUnifiedKPIs,
   getCompanyKPIBreakdown,
@@ -297,56 +298,56 @@ export const CompanyPerformanceView: React.FC = () => {
 
       {/* Overall Multi-Company Summary KPI Strip */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        <div className="bg-[#18191B] border border-[#292B2E] rounded-xl p-3.5 space-y-1">
-          <div className="text-[11px] text-[#A1A1AA]">إجمالي المبيعات</div>
-          <div className="text-base font-bold text-emerald-400">
-            {totals.salesValue.toLocaleString()} ج.م
+          <div className="bg-[#18191B] border border-[#292B2E] rounded-xl p-3.5 space-y-1">
+            <div className="text-[11px] text-[#A1A1AA]">إجمالي المبيعات</div>
+            <div className="text-base font-bold text-emerald-400">
+              {totals.salesValue.toLocaleString()} ج.م
+            </div>
+            <div className="text-[10px] text-[#A1A1AA]">من كافة الشركات</div>
           </div>
-          <div className="text-[10px] text-[#A1A1AA]">من كافة الشركات</div>
-        </div>
 
-        <div className="bg-[#18191B] border border-[#292B2E] rounded-xl p-3.5 space-y-1">
-          <div className="text-[11px] text-[#A1A1AA]">إجمالي التعاقدات</div>
-          <div className="text-base font-bold text-[#EDEDED]">
-            {totals.contractsValue.toLocaleString()} ج.م
+          <div className="bg-[#18191B] border border-[#292B2E] rounded-xl p-3.5 space-y-1">
+            <div className="text-[11px] text-[#A1A1AA]">إجمالي التعاقدات</div>
+            <div className="text-base font-bold text-[#EDEDED]">
+              {totals.contractsValue.toLocaleString()} ج.م
+            </div>
+            <div className="text-[10px] text-[#A1A1AA]">عقود معتمدة</div>
           </div>
-          <div className="text-[10px] text-[#A1A1AA]">عقود معتمدة</div>
-        </div>
 
-        <div className="bg-[#18191B] border border-[#292B2E] rounded-xl p-3.5 space-y-1">
-          <div className="text-[11px] text-[#A1A1AA]">إجمالي التحصيلات</div>
-          <div className="text-base font-bold text-[#C8A75A]">
-            {totals.collectionsValue.toLocaleString()} ج.م
+          <div className="bg-[#18191B] border border-[#292B2E] rounded-xl p-3.5 space-y-1">
+            <div className="text-[11px] text-[#A1A1AA]">إجمالي التحصيلات</div>
+            <div className="text-base font-bold text-[#C8A75A]">
+              {totals.collectionsValue.toLocaleString()} ج.م
+            </div>
+            <div className="text-[10px] text-[#A1A1AA]">دفعات مستلمة</div>
           </div>
-          <div className="text-[10px] text-[#A1A1AA]">دفعات مستلمة</div>
-        </div>
 
-        <div className="bg-[#18191B] border border-[#292B2E] rounded-xl p-3.5 space-y-1">
-          <div className="text-[11px] text-[#A1A1AA]">المستحقات المتبقية</div>
-          <div className="text-base font-bold text-amber-400">
-            {totals.receivablesValue.toLocaleString()} ج.م
+          <div className="bg-[#18191B] border border-[#292B2E] rounded-xl p-3.5 space-y-1">
+            <div className="text-[11px] text-[#A1A1AA]">المستحقات المتبقية</div>
+            <div className="text-base font-bold text-amber-400">
+              {totals.receivablesValue.toLocaleString()} ج.م
+            </div>
+            <div className="text-[10px] text-[#A1A1AA]">قيد التحصيل</div>
           </div>
-          <div className="text-[10px] text-[#A1A1AA]">قيد التحصيل</div>
-        </div>
 
-        <div className="bg-[#18191B] border border-[#292B2E] rounded-xl p-3.5 space-y-1">
-          <div className="text-[11px] text-[#A1A1AA]">الاستفسارات والعملاء</div>
-          <div className="text-base font-bold text-blue-400">
-            {totals.inquiries} / {totals.customers}
+          <div className="bg-[#18191B] border border-[#292B2E] rounded-xl p-3.5 space-y-1">
+            <div className="text-[11px] text-[#A1A1AA]">الاستفسارات والعملاء</div>
+            <div className="text-base font-bold text-blue-400">
+              {totals.inquiries} / {totals.customers}
+            </div>
+            <div className="text-[10px] text-[#A1A1AA]">استفسار / عميل</div>
           </div>
-          <div className="text-[10px] text-[#A1A1AA]">استفسار / عميل</div>
-        </div>
 
-        <div className="bg-[#18191B] border border-[#292B2E] rounded-xl p-3.5 space-y-1">
-          <div className="text-[11px] text-[#A1A1AA]">الهدف الإجمالي الشهري</div>
-          <div className="text-base font-bold text-[#EDEDED]">
-            {totals.targetTotal.toLocaleString()} ج.م
-          </div>
-          <div className="text-[10px] text-emerald-400 font-bold">
-            تحقيق {Math.min(100, Math.round((totals.salesValue / (totals.targetTotal || 1)) * 100))}%
+          <div className="bg-[#18191B] border border-[#292B2E] rounded-xl p-3.5 space-y-1">
+            <div className="text-[11px] text-[#A1A1AA]">الهدف الإجمالي الشهري</div>
+            <div className="text-base font-bold text-[#EDEDED]">
+              {totals.targetTotal.toLocaleString()} ج.م
+            </div>
+            <div className="text-[10px] text-emerald-400 font-bold">
+              تحقيق {Math.min(100, Math.round((totals.salesValue / (totals.targetTotal || 1)) * 100))}%
+            </div>
           </div>
         </div>
-      </div>
 
       {activeSubTab === "performance" ? (
         /* Performance Cards & Grid per Company */
@@ -526,7 +527,7 @@ export const CompanyPerformanceView: React.FC = () => {
             </div>
           </div>
         </div>
-      ) : (
+      ) : activeSubTab === "comparison" ? (
         /* Direct Multi-Company Comparison Tool */
         <div className="space-y-6">
           {/* Comparison Controls */}
@@ -679,7 +680,7 @@ export const CompanyPerformanceView: React.FC = () => {
               ))}
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 };

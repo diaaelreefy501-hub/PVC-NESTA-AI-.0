@@ -108,63 +108,44 @@ export const analyzeCustomerJourney = (
     return { customerId: customer.id, status, reasons, nextAction, suggestedActionType };
   }
 
-  // 2. Intervention Required (Red)
-  if (!customer.assignedTo && !customer.responsible) {
-    status = 'intervention_required';
-    reasons.push('العميل بدون مسؤول مبيعات معيّن.');
-    nextAction = 'تعيين مسؤول للعميل.';
-    suggestedActionType = 'assign';
-  }
-
-  const custFollowUps = followUps.filter((f) => f.customerId === customer.id);
-  const overdueFollowUps = custFollowUps.filter((f) => f.status === 'pending' && f.dueDate < todayStr);
-
-  if (overdueFollowUps.length > 0) {
-    if (status !== 'intervention_required') status = 'intervention_required';
-    reasons.push(`يوجد ${overdueFollowUps.length} متابعة متأخرة.`);
-    if (!suggestedActionType) {
-      nextAction = 'إجراء المتابعة المتأخرة فوراً.';
-      suggestedActionType = 'followup';
-    }
-  }
-
+  // Get customer contracts and opportunities
+  const custContracts = contracts.filter((c) => c.customerId === customer.id);
   const custOpps = opportunities.filter((o) => o.customerId === customer.id);
-  const stalledOpps = custOpps.filter((o) => o.status === 'open' && (!customer.lastContactDate || customer.lastContactDate < new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]));
-  if (stalledOpps.length > 0) {
-    if (status !== 'intervention_required') status = 'intervention_required';
-    reasons.push('يوجد فرصة بيعية متوقفة (لا يوجد نشاط لأكثر من 14 يوم).');
-    if (!suggestedActionType) {
-      nextAction = 'تحديث حالة الفرصة أو إنشاء متابعة جديدة.';
-      suggestedActionType = 'review_opportunity';
+
+  if (custContracts.length > 0) {
+    // A. Contract exists
+    const missingValueContracts = custContracts.filter((c) => !c.totalValue || c.totalValue === 0);
+    if (missingValueContracts.length > 0) {
+      status = 'intervention_required';
+      reasons.push('تعاقد بدون قيمة: يوجد عقد مسجل للعميل ولكن قيمته التعاقدية غير متوفرة أو صفر.');
+      nextAction = 'تحديث القيمة المالية الفعلية للعقد.';
+      suggestedActionType = 'review_contract';
+    } else {
+      // Fully contracted with valid value
+      status = 'healthy';
+      reasons.push('مسار العميل سليم وطبيعي (تم التعاقد وسجل القيم المالية سليم).');
     }
-  }
-
-  // 3. Needs Follow-up (Yellow)
-  if (status === 'healthy') {
-    const custQuotes = quotations.filter((q) => q.customerId === customer.id && q.status !== 'rejected');
-    const openFollowUps = custFollowUps.filter((f) => f.status === 'pending');
-    const custContracts = contracts.filter((c) => c.customerId === customer.id);
-
-    if (custQuotes.length > 0 && custContracts.length === 0 && openFollowUps.length === 0) {
-      status = 'needs_followup';
-      reasons.push('يوجد عرض سعر مفتوح ولا توجد متابعة مجدولة.');
-      nextAction = 'إنشاء متابعة لعرض السعر.';
-      suggestedActionType = 'followup';
-    } else if (openFollowUps.length === 0 && custContracts.length === 0) {
-      status = 'needs_followup';
-      reasons.push('لا توجد أي خطوة تالية أو متابعة مجدولة للعميل.');
-      nextAction = 'تحديد موعد متابعة قادم لضمان استمرار الرحلة.';
-      suggestedActionType = 'followup';
-    } else if (custContracts.length > 0 && custContracts.some((c) => !c.signDate && !c.date)) {
-        status = 'needs_followup';
-        reasons.push('يوجد عقد ببيانات تاريخ غير مكتملة.');
-        nextAction = 'مراجعة تواريخ العقود وتحديثها بالتاريخ الفعلي.';
-        suggestedActionType = 'review_contract';
+  } else {
+    // No Contract
+    const openOpps = custOpps.filter((o) => o.status === 'open');
+    if (openOpps.length > 0) {
+      // B. Open Sales Cycle
+      status = 'intervention_required';
+      const isNegotiation = openOpps.some((o) => o.stage === 'negotiation' || customer.stage === 'negotiation');
+      if (isNegotiation) {
+        reasons.push('مرحلة التفاوض المفتوحة: العميل في مرحلة التفاوض والفرصة البيعية ما زالت معلقة.');
+        nextAction = 'حسم التفاوض والعمل على توقيع العقد.';
+        suggestedActionType = 'review_opportunity';
+      } else {
+        reasons.push('مسار بيع مفتوح ومتابعة مستحقة: العميل في مرحلة تشغيلية نشطة ويوجد إجراء مطلوب للمتابعة.');
+        nextAction = 'متابعة عرض السعر والمستندات الفنية.';
+        suggestedActionType = 'followup';
+      }
+    } else {
+      // No Contract & No Open Opportunity
+      status = 'healthy';
+      reasons.push('مسار العميل سليم (لا توجد فرص مفتوحة أو تعاقدات معلقة).');
     }
-  }
-
-  if (reasons.length === 0) {
-    reasons.push('مسار العميل سليم وطبيعي.');
   }
 
   return { customerId: customer.id, status, reasons, nextAction, suggestedActionType };

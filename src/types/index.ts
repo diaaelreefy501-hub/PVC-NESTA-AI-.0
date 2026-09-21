@@ -22,25 +22,58 @@ export interface Company {
   logoUrl?: string; // High-res image logo (Base64 data URI or image URL)
   userTargets?: Record<string, number>; // userId -> target in EGP
   userRoles?: Record<string, CompanyRole>; // userId -> role in this company
+  // Finance & Commissions Model
+  commissionTiming?: 'contract_signing' | 'down_payment' | 'full_collection' | 'custom' | 'payment_based';
+  commissionRate?: number; // e.g. 2.5%
+  commissionNotes?: string;
+  employeeAllocationRatio?: number; // e.g. 50% fixed allocation
+  monthlyAdvertisingBudget?: number; // e.g. 25000 EGP/month
+  archivedAt?: string;
+  archivedBy?: string;
+  // NESTA Service plan attributes
+  servicePlan?: string;
+  monthlyServicePrice?: number;
+  serviceStartDate?: string;
+  serviceStatus?: 'Active' | 'Paused' | 'Cancelled' | 'Expired';
+  billingCycle?: 'Monthly' | 'Quarterly' | 'Yearly';
+  serviceNotes?: string;
+  address?: string;
 }
 
 export type InterestLevel = "hot" | "warm" | "cold" | "lost";
 
 export type CustomerStage =
+  | "new"
+  | "qualified"
+  | "active"
+  | "contracted"
+  | "inactive"
+  | "not_interested"
+  | "archived"
   | "inquiry"
   | "contacted"
-  | "qualified"
   | "inspection"
   | "measurements"
   | "quotation"
   | "followup"
   | "negotiation"
-  | "contracted"
   | "sold"
   | "won"
   | "lost"
   | "deferred"
-  | "new";
+  | "closed"
+  | "duplicate";
+
+export type InquiryStage =
+  | "new"
+  | "contacted"
+  | "qualified"
+  | "converted"
+  | "not_qualified"
+  | "not_interested"
+  | "no_response"
+  | "duplicate"
+  | "closed";
 
 export type CustomerSource =
   | "WhatsApp"
@@ -94,7 +127,7 @@ export interface Inquiry {
   source: CustomerSource;
   otherSource?: string;
   interestLevel: InterestLevel;
-  stage: CustomerStage;
+  stage: InquiryStage | CustomerStage;
   notes?: string;
   date: string;
   lastContactDate: string;
@@ -139,6 +172,8 @@ export interface Interaction {
 
 export type PriorityLevel = "urgent" | "high" | "medium" | "low";
 
+export type FollowUpStatus = "pending" | "in_progress" | "completed" | "cancelled" | "skipped";
+
 export interface FollowUp {
   id: string;
   companyId: CompanyId;
@@ -151,7 +186,7 @@ export interface FollowUp {
   date?: string; // Backwards compatible alias
   title: string;
   notes?: string;
-  status: "pending" | "completed" | "cancelled";
+  status: FollowUpStatus;
   priority: PriorityLevel;
   createdAt: string;
   responsible?: string;
@@ -172,6 +207,227 @@ export interface AppUser {
   phone?: string;
 }
 
+export type CommissionRuleType = 'percentage_of_contract' | 'percentage_of_collection' | 'fixed_per_contract';
+export type CommissionTimingType = 'contract_signing' | 'down_payment' | 'full_collection' | 'custom';
+
+export interface EmployeeSalaryRecord {
+  id: string;
+  employeeId: string;
+  companyId: CompanyId;
+  effectiveFrom: string; // YYYY-MM
+  effectiveTo?: string; // YYYY-MM (null if current)
+  monthlySalary: number; // in EGP
+  notes?: string;
+  createdAt: string;
+}
+
+export interface CommissionAdjustment {
+  id: string;
+  employeeId: string;
+  companyId: CompanyId;
+  amount: number; // Positive for bonus, negative for deduction
+  period: string; // YYYY-MM
+  reason: string;
+  date: string; // YYYY-MM-DD
+  createdAt: string;
+}
+
+export interface CommissionRateRecord {
+  id: string;
+  employeeId: string;
+  companyId: CompanyId;
+  effectiveFrom: string; // YYYY-MM
+  effectiveTo?: string; // YYYY-MM
+  percentage: number;
+  notes?: string;
+  createdAt: string;
+}
+
+export type StatementApprovalStatus = 'calculated' | 'reviewed' | 'approved' | 'paid';
+
+export interface StatementContractDetail {
+  id: string;
+  contractId: string;
+  contractNumber: string;
+  customerName: string;
+  date: string;
+  totalValue: number;
+  paidAmount: number;
+  remainingAmount: number;
+  isEligible: boolean;
+  ineligibilityReason?: string;
+  commissionRate: number;
+  commissionBase: number;
+  earnedAmount: number;
+  triggerStatus: string;
+}
+
+export interface MonthlyStatement {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  companyId: CompanyId;
+  period: string; // YYYY-MM
+  startDate: string;
+  endDate: string;
+  
+  // Salary
+  salaryDue: number;
+  salaryPaid: number;
+  
+  // Commission Calculation (Monthly Aggregate)
+  eligibleContractsCount: number;
+  eligibleContractsTotal: number;
+  eligibleCollectionTotal: number; // Sum of collected amounts for eligible contracts
+  commissionRateUsed: number;
+  commissionEarned: number; // calculated_commission (Total * Rate)
+  
+  // Adjustments
+  bonuses: number;
+  deductions: number;
+  adjustments: number; // Net adjustment amount
+  
+  // Totals
+  totalDue: number; // Salary + Commission + Bonuses - Deductions
+  totalPaid: number;
+  paidCommission: number;
+  paidSalary: number;
+  remaining: number;
+  
+  // Status & Workflow
+  status: StatementApprovalStatus;
+  calculatedAt: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  approvedAt?: string;
+  approvedBy?: string;
+  paidAt?: string;
+  paidBy?: string;
+  recalculatedAt?: string;
+  
+  // Audit & Metadata
+  notes?: string;
+  history?: Array<{
+    field: string;
+    oldValue: any;
+    newValue: any;
+    reason: string;
+    user: string;
+    date: string;
+  }>;
+  contractDetails: StatementContractDetail[];
+  updatedAt: string;
+}
+
+export interface Employee {
+  id: string;
+  companyId: CompanyId;
+  name: string;
+  role: string; // Job Title
+  phone?: string;
+  email?: string;
+  startDate: string; // YYYY-MM-DD
+  active: boolean; // Active / Inactive
+  monthlySalary: number; // Current Base Monthly Salary in EGP
+  salaryHistory?: EmployeeSalaryRecord[]; // Historical salaries with effective dates
+  commissionRule: CommissionRuleType;
+  commissionPercentage: number; // e.g. 2.0%
+  commissionHistory?: CommissionRateRecord[]; // Historical commission rates
+  commissionTiming: CommissionTimingType;
+  commissionNotes?: string;
+  commissionAdjustments?: CommissionAdjustment[];
+  monthlyStatements?: MonthlyStatement[];
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface SalaryPayment {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  companyId: CompanyId;
+  period: string; // YYYY-MM
+  amount: number;
+  paymentDate: string; // YYYY-MM-DD
+  status: 'paid' | 'pending' | 'cancelled';
+  paymentMethod?: string;
+  receiptNumber?: string;
+  notes?: string;
+  createdAt: string;
+}
+
+export interface CommissionPayment {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  companyId: CompanyId;
+  contractId?: string;
+  contractNumber?: string;
+  opportunityId?: string;
+  customerName?: string;
+  period: string; // YYYY-MM
+  contractValue?: number;
+  commissionRate?: number;
+  calculatedEarnedAmount: number; // Total commission earned from this deal
+  amount: number; // Amount paid in this transaction
+  paymentDate: string; // YYYY-MM-DD
+  status: 'paid' | 'pending' | 'cancelled';
+  paymentMethod?: string;
+  receiptNumber?: string;
+  notes?: string;
+  createdAt: string;
+}
+
+export interface AdvertisingBudget {
+  id: string;
+  companyId: CompanyId;
+  period: string; // YYYY-MM
+  budgetAmount: number;
+  notes?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface AdSpend {
+  id: string;
+  companyId: CompanyId;
+  date: string; // YYYY-MM-DD
+  amount: number;
+  channel: string;
+  campaign?: string;
+  notes?: string;
+  createdAt?: string;
+  createdBy?: string;
+}
+
+export type OwnerRuleType = 'fixed_monthly' | 'percentage_of_revenue' | 'profit_share' | 'manual_due';
+
+export interface OwnerFinancialRule {
+  id: string;
+  companyId: CompanyId;
+  ruleType: OwnerRuleType;
+  value: number;
+  effectiveFrom: string; // YYYY-MM
+  effectiveTo?: string;
+  active: boolean;
+  notes?: string;
+  createdAt?: string;
+}
+
+export interface OwnerPayment {
+  id: string;
+  companyId: CompanyId;
+  period: string; // YYYY-MM
+  dueAmount: number;
+  paidAmount: number;
+  paymentDate: string; // YYYY-MM-DD
+  paymentMethod?: string;
+  status: 'paid' | 'pending' | 'cancelled';
+  notes?: string;
+  createdAt?: string;
+  createdBy?: string;
+}
+
 export type PermissionName =
   | "view_customers"
   | "manage_customers"
@@ -184,7 +440,11 @@ export type PermissionName =
   | "view_analytics"
   | "manage_targets"
   | "manage_company_users"
-  | "manage_company_settings";
+  | "manage_company_settings"
+  | "delete_records"
+  | "approve_records"
+  | "manage_finance"
+  | "manage_settings";
 
 export type CustomerScope = "specific" | "all";
 export type OpportunityStage =
@@ -286,11 +546,14 @@ export interface QuotationItem {
 export type QuoteStatus =
   | "draft"
   | "sent"
-  | "negotiation"
+  | "viewed"
+  | "revised"
   | "accepted"
-  | "contracted"
   | "rejected"
-  | "expired";
+  | "expired"
+  | "cancelled"
+  | "negotiation"
+  | "contracted";
 
 export interface Quotation {
   importBatchId?: string;
@@ -324,6 +587,18 @@ export interface Quotation {
   updatedAt?: string;
 }
 
+export type InspectionStatus =
+  | "requested"
+  | "scheduled"
+  | "confirmed"
+  | "completed"
+  | "no_show"
+  | "rescheduled"
+  | "cancelled"
+  | "needs_revisit"
+  | "invalid"
+  | "pending"; // backwards compatibility
+
 export interface Inspection {
   id: string;
   createdAt?: string;
@@ -337,15 +612,37 @@ export interface Inspection {
   time?: string;
   surveyor: string;
   notes: string;
-  result: "pending" | "completed" | "rescheduled" | "cancelled";
-  status?: "pending" | "completed" | "rescheduled" | "cancelled";
+  result: InspectionStatus;
+  status?: InspectionStatus;
   scheduledDate?: string;
   measurementsCount: number;
   updatedAt?: string;
 }
 
-export type ContractStatus = "active" | "completed" | "cancelled" | "signed" | "in_production" | "installed";
-export type CollectionStatus = "contracted" | "in_progress" | "delivered" | "collected" | "closed" | "completed" | "partial";
+export type ContractStatus =
+  | "draft"
+  | "pending_signature"
+  | "active"
+  | "completed"
+  | "cancelled"
+  | "suspended"
+  | "signed"
+  | "in_production"
+  | "installed";
+export type CollectionStatus =
+  | "scheduled"
+  | "due"
+  | "partially_paid"
+  | "paid"
+  | "overdue"
+  | "cancelled"
+  | "contracted"
+  | "in_progress"
+  | "delivered"
+  | "collected"
+  | "closed"
+  | "completed"
+  | "partial";
 
 export interface Contract {
   importBatchId?: string;
@@ -416,16 +713,19 @@ export type PaymentMethod =
   | "visa"
   | "vodafone_cash";
 
+export type PaymentStatus = "recorded" | "confirmed" | "reversed" | "refunded";
+
 export interface Payment {
   id: string;
-  createdAt?: string;
+  createdAt?: string; // Recorded At timestamp
   contractId: string;
   customerId: string;
   customerName: string;
   companyId: CompanyId;
   amount: number;
-  date: string; // Event Date of collection/payment
+  date: string; // Event Date of collection/payment (transaction date)
   method: PaymentMethod;
+  status?: PaymentStatus;
   receiptNumber?: string;
   notes?: string;
   updatedAt?: string;
@@ -567,6 +867,8 @@ export type NavigationTab =
   | "quotations"
   | "contracts"
   | "collections"
+  | "finance"
+  | "reports"
   | "products"
   | "analytics"
   | "performance"

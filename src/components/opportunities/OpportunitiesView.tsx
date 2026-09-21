@@ -500,6 +500,7 @@ export const OpportunitiesView: React.FC = () => {
     batchDeleteOpportunities,
     batchCloseOpportunitiesWon,
     batchCloseOpportunitiesLost,
+    canDeleteRecords,
     hasPermission,
     showToast,
     navigationFilter,
@@ -957,18 +958,20 @@ export const OpportunitiesView: React.FC = () => {
                 <span>إغلاق جماعي كـ Lost</span>
               </button>
 
-              <button
-                onClick={() => {
-                  if (confirm(`هل أنت متأكد من حذف ${selectedIds.length} فرص بيعية؟`)) {
-                    batchDeleteOpportunities(selectedIds);
-                    setSelectedIds([]);
-                  }
-                }}
-                className="flex items-center gap-1 px-3 py-1.5 bg-[#202225] border border-rose-800/40 text-rose-400 hover:bg-rose-950/40 rounded-xl font-bold cursor-pointer"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>حذف المحدد</span>
-              </button>
+              {canDeleteRecords && (
+                <button
+                  onClick={() => {
+                    if (confirm(`هل أنت متأكد من حذف ${selectedIds.length} فرص بيعية؟`)) {
+                      batchDeleteOpportunities(selectedIds);
+                      setSelectedIds([]);
+                    }
+                  }}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-[#202225] border border-rose-800/40 text-rose-400 hover:bg-rose-950/40 rounded-xl font-bold cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>حذف المحدد</span>
+                </button>
+              )}
 
               <button
                 onClick={() => setSelectedIds([])}
@@ -1245,12 +1248,17 @@ export const OpportunitiesView: React.FC = () => {
                 </div>
 
                 {/* Next Operational Action */}
-                {opp.nextAction && (
+                {opp.nextAction ? (
                   <div className="flex items-center gap-2 p-2 bg-[#202225] rounded-xl text-[11px] text-[#EDEDED] border border-[#292B2E]">
                     <Clock className="w-3.5 h-3.5 text-[#C8A75A] shrink-0" />
                     <span className="truncate">الإجراء التالي: <strong className="text-[#EDEDED]">{opp.nextAction}</strong></span>
                   </div>
-                )}
+                ) : opp.status === "open" ? (
+                  <div className="flex items-center gap-1.5 p-2 bg-amber-500/10 rounded-xl text-[11px] text-amber-300 border border-amber-500/30">
+                    <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span>⚠️ تنبيه: لم يتم تحديد الإجراء القادم لإتمام الصفقة</span>
+                  </div>
+                ) : null}
 
                 {/* Lost Reason Notice if Lost */}
                 {opp.status === "lost" && opp.lossReason && (
@@ -1295,16 +1303,18 @@ export const OpportunitiesView: React.FC = () => {
                   >
                     <Edit2 className="w-3.5 h-3.5" />
                   </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setDeletingOpp(opp);
-                    }}
-                    title="حذف الفرصة"
-                    className="p-2 text-[#A1A1AA] hover:text-rose-400 rounded-xl hover:bg-rose-950/40 border border-[#292B2E] transition-colors cursor-pointer"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                  {canDeleteRecords && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDeletingOpp(opp);
+                      }}
+                      title="حذف الفرصة"
+                      className="p-2 text-[#A1A1AA] hover:text-rose-400 rounded-xl hover:bg-rose-950/40 border border-[#292B2E] transition-colors cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
               </div>
             );
@@ -1895,16 +1905,18 @@ export const OpportunitiesView: React.FC = () => {
                     >
                       تعديل بيانات الفرصة
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDeletingOpp(selectedOppForActions);
-                        setSelectedOppForActions(null);
-                      }}
-                      className="px-4 py-2 bg-rose-950/40 border border-rose-800/40 hover:bg-rose-900/40 text-rose-400 font-bold rounded-xl transition-all cursor-pointer"
-                    >
-                      حذف الفرصة
-                    </button>
+                    {canDeleteRecords && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeletingOpp(selectedOppForActions);
+                          setSelectedOppForActions(null);
+                        }}
+                        className="px-4 py-2 bg-rose-950/40 border border-rose-800/40 hover:bg-rose-900/40 text-rose-400 font-bold rounded-xl transition-all cursor-pointer"
+                      >
+                        حذف الفرصة
+                      </button>
+                    )}
                   </div>
 
                   <button

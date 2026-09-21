@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef } from "react";
 import { useApp } from "../../context/AppContext";
-import { Company, CompanyRole, AppUser } from "../../types";
+import { Company, CompanyRole, AppUser, Employee } from "../../types";
 import { CompanyLogo } from "../common/CompanyLogo";
 import {
   Building2,
@@ -26,6 +26,13 @@ import {
   CheckCircle2,
   AlertCircle,
   Award,
+  Archive,
+  RotateCcw,
+  Briefcase,
+  UserCheck,
+  UserX,
+  Calendar,
+  ShieldAlert,
 } from "lucide-react";
 
 export const CompaniesView: React.FC = () => {
@@ -34,9 +41,16 @@ export const CompaniesView: React.FC = () => {
     allCompanies,
     addCompany,
     updateCompany,
+    archiveCompany,
+    restoreCompany,
     deleteCompany,
     customers,
     sales,
+    employees,
+    addEmployee,
+    updateEmployee,
+    toggleEmployeeStatus,
+    updateEmployeeSalary,
     updateCompanyTarget,
     updateUserTarget,
     assignUserCompanyRole,
@@ -53,19 +67,123 @@ export const CompaniesView: React.FC = () => {
   const [statusTab, setStatusTab] = useState<'all' | 'active' | 'disabled' | 'archived'>('all');
   const [editingComp, setEditingComp] = useState<Company | null>(null);
   const [activeTabInModal, setActiveTabInModal] = useState<
-    "identity" | "targets" | "users" | "preview"
+    "identity" | "employees" | "targets" | "users" | "preview"
   >("identity");
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+
+  // Employee management state inside company modal
+  const [showAddEmployeeForm, setShowAddEmployeeForm] = useState(false);
+  const [editingEmployeeId, setEditingEmployeeId] = useState<string | null>(null);
+  const [empName, setEmpName] = useState("");
+  const [empRole, setEmpRole] = useState("مهندس مبيعات");
+  const [empPhone, setEmpPhone] = useState("");
+  const [empEmail, setEmpEmail] = useState("");
+  const [empSalary, setEmpSalary] = useState<number>(6000);
+  const [empCommissionRule, setEmpCommissionRule] = useState<
+    "percentage_of_contract" | "percentage_of_collection" | "fixed_per_contract"
+  >("percentage_of_contract");
+  const [empCommissionPercentage, setEmpCommissionPercentage] = useState<number>(2.5);
+  const [empCommissionTiming, setEmpCommissionTiming] = useState<
+    "contract_signing" | "down_payment" | "full_collection" | "custom"
+  >("contract_signing");
+  const [empCommissionNotes, setEmpCommissionNotes] = useState("");
+  const [empStartDate, setEmpStartDate] = useState(new Date().toISOString().split("T")[0]);
+  const [empActive, setEmpActive] = useState(true);
+
+  const resetEmployeeForm = () => {
+    setEmpName("");
+    setEmpRole("مهندس مبيعات");
+    setEmpPhone("");
+    setEmpEmail("");
+    setEmpSalary(6000);
+    setEmpCommissionRule("percentage_of_contract");
+    setEmpCommissionPercentage(2.5);
+    setEmpCommissionTiming("contract_signing");
+    setEmpCommissionNotes("");
+    setEmpStartDate(new Date().toISOString().split("T")[0]);
+    setEmpActive(true);
+    setEditingEmployeeId(null);
+    setShowAddEmployeeForm(false);
+  };
+
+  const startEditEmployee = (emp: Employee) => {
+    setEditingEmployeeId(emp.id);
+    setEmpName(emp.name);
+    setEmpRole(emp.role);
+    setEmpPhone(emp.phone || "");
+    setEmpEmail(emp.email || "");
+    setEmpSalary(emp.monthlySalary || 0);
+    setEmpCommissionRule(emp.commissionRule || "percentage_of_contract");
+    setEmpCommissionPercentage(emp.commissionPercentage || 0);
+    setEmpCommissionTiming(emp.commissionTiming || "contract_signing");
+    setEmpCommissionNotes(emp.commissionNotes || "");
+    setEmpStartDate(emp.startDate || new Date().toISOString().split("T")[0]);
+    setEmpActive(emp.active !== false);
+    setShowAddEmployeeForm(true);
+  };
+
+  const handleSaveEmployee = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingComp) return;
+    if (!empName.trim()) {
+      showToast("يرجى إدخال اسم الموظف", "warning");
+      return;
+    }
+
+    if (editingEmployeeId) {
+      updateEmployee(editingEmployeeId, {
+        name: empName.trim(),
+        role: empRole.trim(),
+        phone: empPhone.trim() || undefined,
+        email: empEmail.trim() || undefined,
+        monthlySalary: Number(empSalary) || 0,
+        commissionRule: empCommissionRule,
+        commissionPercentage: Number(empCommissionPercentage) || 0,
+        commissionTiming: empCommissionTiming,
+        commissionNotes: empCommissionNotes.trim() || undefined,
+        startDate: empStartDate,
+        active: empActive,
+      });
+      showToast("تم تحديث بيانات الموظف بنجاح", "success");
+    } else {
+      addEmployee({
+        companyId: editingComp.id,
+        name: empName.trim(),
+        role: empRole.trim(),
+        phone: empPhone.trim() || undefined,
+        email: empEmail.trim() || undefined,
+        monthlySalary: Number(empSalary) || 0,
+        commissionRule: empCommissionRule,
+        commissionPercentage: Number(empCommissionPercentage) || 0,
+        commissionTiming: empCommissionTiming,
+        commissionNotes: empCommissionNotes.trim() || undefined,
+        startDate: empStartDate,
+        active: empActive,
+      });
+    }
+
+    resetEmployeeForm();
+  };
 
   // New Company form state
   const [name, setName] = useState("");
   const [nameEn, setNameEn] = useState("");
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [address, setAddress] = useState("");
   const [monthlyTarget, setMonthlyTarget] = useState(300000);
   const [annualTarget, setAnnualTarget] = useState(3600000);
   const [color, setColor] = useState("#C8A75A");
   const [secondaryColor, setSecondaryColor] = useState("#111111");
   const [logoUrl, setLogoUrl] = useState<string>("");
+  
+  // NESTA Service plan fields for creation
+  const [servicePlan, setServicePlan] = useState("لوحة تحكم احترافية للشركات");
+  const [monthlyServicePrice, setMonthlyServicePrice] = useState<number>(3500);
+  const [serviceStartDate, setServiceStartDate] = useState(new Date().toISOString().split("T")[0]);
+  const [serviceStatus, setServiceStatus] = useState<'Active' | 'Paused' | 'Cancelled' | 'Expired'>("Active");
+  const [billingCycle, setBillingCycle] = useState<'Monthly' | 'Quarterly' | 'Yearly'>("Monthly");
+  const [serviceNotes, setServiceNotes] = useState("");
 
   // Assign user to company state
   const [selectedUserIdToAdd, setSelectedUserIdToAdd] = useState<string>("");
@@ -139,6 +257,7 @@ export const CompaniesView: React.FC = () => {
       name: name.trim(),
       nameEn: nameEn.trim() || undefined,
       phone: phone.trim(),
+      email: email.trim() || undefined,
       monthlyTarget: monthlyTarget || 300000,
       annualTarget: annualTarget || (monthlyTarget ? monthlyTarget * 12 : 3600000),
       color,
@@ -150,12 +269,27 @@ export const CompaniesView: React.FC = () => {
       logoUrl: logoUrl || undefined,
       userRoles: currentUser ? { [currentUser.id]: "owner" } : {},
       userTargets: {},
+      servicePlan,
+      monthlyServicePrice: Number(monthlyServicePrice) || 0,
+      serviceStartDate,
+      serviceStatus,
+      billingCycle,
+      serviceNotes,
+      address,
     });
 
     setName("");
     setNameEn("");
     setPhone("");
+    setEmail("");
+    setAddress("");
     setLogoUrl("");
+    setServicePlan("لوحة تحكم احترافية للشركات");
+    setMonthlyServicePrice(3500);
+    setServiceStartDate(new Date().toISOString().split("T")[0]);
+    setServiceStatus("Active");
+    setBillingCycle("Monthly");
+    setServiceNotes("");
     setShowAdd(false);
   };
 
@@ -195,12 +329,20 @@ export const CompaniesView: React.FC = () => {
       name: editingComp.name,
       nameEn: editingComp.nameEn,
       phone: editingComp.phone,
+      email: editingComp.email,
       monthlyTarget: editingComp.monthlyTarget,
       annualTarget: editingComp.annualTarget || editingComp.monthlyTarget * 12,
       color: editingComp.color,
       secondaryColor: editingComp.secondaryColor || "#111111",
       logoUrl: finalLogo,
       active: editingComp.active,
+      servicePlan: editingComp.servicePlan,
+      monthlyServicePrice: editingComp.monthlyServicePrice !== undefined ? Number(editingComp.monthlyServicePrice) : undefined,
+      serviceStartDate: editingComp.serviceStartDate,
+      serviceStatus: editingComp.serviceStatus,
+      billingCycle: editingComp.billingCycle,
+      serviceNotes: editingComp.serviceNotes,
+      address: editingComp.address,
     });
     showToast("تم تحديث بيانات الشركة بنجاح", "success");
     setEditingComp(null);
@@ -333,19 +475,25 @@ export const CompaniesView: React.FC = () => {
           const pct = Math.min(100, Math.round((monthSales / target) * 100));
           const remaining = Math.max(0, target - monthSales);
           const companyUsersList = getCompanyUsers(comp);
+          const compEmployees = employees.filter((e) => e.companyId === comp.id);
+          const isArchived = comp.status === "archived" || comp.status === "closed";
 
           return (
             <div
               key={comp.id}
-              className="bg-white rounded-3xl border border-[#EAEAEA] shadow-2xs hover:shadow-md transition-all overflow-hidden flex flex-col justify-between"
+              className={`bg-white rounded-3xl border shadow-2xs hover:shadow-md transition-all overflow-hidden flex flex-col justify-between ${
+                isArchived ? "border-amber-200/80 bg-stone-50/50 opacity-95" : "border-[#EAEAEA]"
+              }`}
             >
               {/* Top Accent Band with Brand Colors */}
               <div
                 className="h-3 w-full"
                 style={{
-                  background: `linear-gradient(to left, ${comp.color}, ${
-                    comp.secondaryColor || "#111111"
-                  })`,
+                  background: isArchived
+                    ? "#9CA3AF"
+                    : `linear-gradient(to left, ${comp.color}, ${
+                        comp.secondaryColor || "#111111"
+                      })`,
                 }}
               />
 
@@ -355,7 +503,14 @@ export const CompaniesView: React.FC = () => {
                   <div className="flex items-center gap-3">
                     <CompanyLogo company={comp} size="lg" />
                     <div>
-                      <h3 className="font-black text-base text-[#111111]">{comp.name}</h3>
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-black text-base text-[#111111]">{comp.name}</h3>
+                        {isArchived && (
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-rose-100 text-rose-700 border border-rose-200">
+                            مؤرشفة
+                          </span>
+                        )}
+                      </div>
                       {comp.nameEn && (
                         <span className="text-[11px] text-[#9CA3AF] font-mono block">
                           {comp.nameEn}
@@ -384,15 +539,38 @@ export const CompaniesView: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Actions (Edit / Delete) */}
+                  {/* Actions (Edit / Archive / Restore / Delete) */}
                   <div className="flex items-center gap-1">
                     <button
                       onClick={() => openEditModal(comp, "identity")}
                       className="p-1.5 text-[#6B7280] hover:text-[#111111] hover:bg-[#F8F8F5] rounded-xl transition-colors cursor-pointer"
-                      title="إدارة بيانات وهوية الشركة"
+                      title="إدارة بيانات وهوية وموظفي الشركة"
                     >
                       <Settings className="w-4 h-4" />
                     </button>
+
+                    {hasPermission("manage_company_settings") && (
+                      <>
+                        {isArchived ? (
+                          <button
+                            onClick={() => restoreCompany(comp.id)}
+                            className="p-1.5 text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 rounded-xl transition-colors cursor-pointer"
+                            title="استعادة الشركة وتفعيلها بنفس البيانات"
+                          >
+                            <RotateCcw className="w-4 h-4" />
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => archiveCompany(comp.id)}
+                            className="p-1.5 text-amber-600 hover:text-amber-700 hover:bg-amber-50 rounded-xl transition-colors cursor-pointer"
+                            title="أرشفة الشركة وحفظ كافة بياناتها"
+                          >
+                            <Archive className="w-4 h-4" />
+                          </button>
+                        )}
+                      </>
+                    )}
+
                     {companies.length > 1 && hasPermission("manage_company_settings") && (
                       <button
                         onClick={() => setDeleteTargetId(comp.id)}
@@ -411,29 +589,42 @@ export const CompaniesView: React.FC = () => {
                     <Phone className="w-3.5 h-3.5 text-[#9CA3AF]" />
                     <span>{comp.phone || "بدون رقم مسجل"}</span>
                   </div>
-                  <span
-                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                      comp.active !== false
-                        ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                        : "bg-stone-100 text-stone-600 border border-stone-200"
-                    }`}
-                  >
-                    {comp.active !== false ? "مفعلة للنظام" : "معطلة"}
-                  </span>
+                  {isArchived ? (
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-stone-100 text-stone-700 border border-stone-300 flex items-center gap-1">
+                      <Archive className="w-3 h-3 text-stone-500" />
+                      <span>مؤرشفة (محفوظة)</span>
+                    </span>
+                  ) : comp.active !== false ? (
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 inline-block"></span>
+                      <span>مفعلة للنظام</span>
+                    </span>
+                  ) : (
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-600 inline-block"></span>
+                      <span>معطلة مؤقتًا</span>
+                    </span>
+                  )}
                 </div>
 
                 {/* Statistics Box */}
-                <div className="grid grid-cols-2 gap-2 p-3 bg-[#F8F8F5] rounded-2xl border border-[#F0F0EE] text-xs">
+                <div className="grid grid-cols-3 gap-2 p-3 bg-[#F8F8F5] rounded-2xl border border-[#F0F0EE] text-xs text-center">
                   <div>
-                    <span className="text-[#6B7280] text-[11px] block">عملاء الشركة</span>
+                    <span className="text-[#6B7280] text-[11px] block">عملاء</span>
                     <strong className="text-sm font-bold text-[#111111]">
-                      {compCustomers.length} عميل
+                      {compCustomers.length}
                     </strong>
                   </div>
                   <div>
-                    <span className="text-[#6B7280] text-[11px] block">المبيعات الإجمالية</span>
+                    <span className="text-[#6B7280] text-[11px] block">موظفون</span>
+                    <strong className="text-sm font-bold text-[#111111]">
+                      {compEmployees.length}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="text-[#6B7280] text-[11px] block">المبيعات</span>
                     <strong className="text-sm font-bold text-[#C8A75A] font-mono">
-                      {totalSales.toLocaleString()} ج.م
+                      {totalSales.toLocaleString()}
                     </strong>
                   </div>
                 </div>
@@ -546,6 +737,21 @@ export const CompaniesView: React.FC = () => {
               >
                 <Palette className="w-4 h-4" />
                 <span>الهوية والشعار</span>
+              </button>
+
+              <button
+                onClick={() => setActiveTabInModal("employees")}
+                className={`py-3 px-4 flex items-center gap-2 border-b-2 transition-all cursor-pointer ${
+                  activeTabInModal === "employees"
+                    ? "border-[#C8A75A] text-[#111111]"
+                    : "border-transparent text-[#6B7280] hover:text-[#111111]"
+                }`}
+              >
+                <Users className="w-4 h-4" />
+                <span>
+                  الموظفون والرواتب (
+                  {employees.filter((e) => e.companyId === editingComp.id).length})
+                </span>
               </button>
 
               <button
@@ -736,8 +942,8 @@ export const CompaniesView: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Phone & Status */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* Phone, Email & Address */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div className="space-y-1">
                       <label className="font-bold text-[#111111]">هاتف الشركة:</label>
                       <input
@@ -750,6 +956,140 @@ export const CompaniesView: React.FC = () => {
                       />
                     </div>
 
+                    <div className="space-y-1">
+                      <label className="font-bold text-[#111111]">البريد الإلكتروني للشركة:</label>
+                      <input
+                        type="email"
+                        value={editingComp.email || ""}
+                        onChange={(e) =>
+                          setEditingComp({ ...editingComp, email: e.target.value })
+                        }
+                        placeholder="info@company.com"
+                        className="w-full p-2.5 bg-[#F8F8F5] border border-[#EAEAEA] rounded-xl focus:border-[#C8A75A] outline-hidden"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-[#111111]">عنوان وموقع الشركة:</label>
+                      <input
+                        type="text"
+                        value={editingComp.address || ""}
+                        onChange={(e) =>
+                          setEditingComp({ ...editingComp, address: e.target.value })
+                        }
+                        placeholder="مثال: التجمع الخامس، القاهرة"
+                        className="w-full p-2.5 bg-[#F8F8F5] border border-[#EAEAEA] rounded-xl focus:border-[#C8A75A] outline-hidden"
+                      />
+                    </div>
+                  </div>
+
+                  {/* NESTA Service Plan & Billing Contract */}
+                  <div className="p-4 bg-amber-50/50 rounded-2xl border border-amber-200/60 space-y-3">
+                    <h4 className="font-bold text-xs text-amber-900 flex items-center gap-1.5 border-b border-amber-200/40 pb-2">
+                      <ShieldAlert className="w-4 h-4 text-amber-600" />
+                      <span>تفاصيل باقة وعقد خدمة NESTA للشركة</span>
+                    </h4>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      <div className="space-y-1">
+                        <label className="font-bold text-amber-900">باقة الخدمة (Service Plan):</label>
+                        <input
+                          type="text"
+                          value={editingComp.servicePlan || ""}
+                          onChange={(e) =>
+                            setEditingComp({ ...editingComp, servicePlan: e.target.value })
+                          }
+                          placeholder="مثال: لوحة تحكم احترافية للشركات"
+                          className="w-full p-2 bg-white border border-amber-200 rounded-xl focus:border-amber-500 outline-hidden"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="font-bold text-amber-900">سعر الخدمة الشهري للشركة (ج.م):</label>
+                        <input
+                          type="number"
+                          value={editingComp.monthlyServicePrice || ""}
+                          onChange={(e) =>
+                            setEditingComp({ ...editingComp, monthlyServicePrice: Number(e.target.value) || 0 })
+                          }
+                          placeholder="3500"
+                          className="w-full p-2 bg-white border border-amber-200 rounded-xl font-mono focus:border-amber-500 outline-hidden"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="font-bold text-amber-900">تاريخ بدء العقد:</label>
+                        <input
+                          type="date"
+                          value={editingComp.serviceStartDate || ""}
+                          onChange={(e) =>
+                            setEditingComp({ ...editingComp, serviceStartDate: e.target.value })
+                          }
+                          className="w-full p-2 bg-white border border-amber-200 rounded-xl focus:border-amber-500 outline-hidden text-xs"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="font-bold text-amber-900">دورة الفوترة:</label>
+                        <select
+                          value={editingComp.billingCycle || "Monthly"}
+                          onChange={(e) =>
+                            setEditingComp({ ...editingComp, billingCycle: e.target.value as any })
+                          }
+                          className="w-full p-2 bg-white border border-amber-200 rounded-xl focus:border-amber-500 outline-hidden"
+                        >
+                          <option value="Monthly">شهري (Monthly)</option>
+                          <option value="Quarterly">ربع سنوي (Quarterly)</option>
+                          <option value="Yearly">سنوي (Yearly)</option>
+                        </select>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="font-bold text-amber-900">حالة خطة الخدمة:</label>
+                        <select
+                          value={editingComp.serviceStatus || "Active"}
+                          onChange={(e) =>
+                            setEditingComp({ ...editingComp, serviceStatus: e.target.value as any })
+                          }
+                          className="w-full p-2 bg-white border border-amber-200 rounded-xl focus:border-amber-500 outline-hidden"
+                        >
+                          <option value="Active">نشط (Active)</option>
+                          <option value="Paused">موقوف مؤقتاً (Paused)</option>
+                          <option value="Cancelled">ملغى (Cancelled)</option>
+                          <option value="Expired">منتهي الصلاحية (Expired)</option>
+                        </select>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="font-bold text-amber-900">ميزانية الإعلانات الشهرية (ج.م):</label>
+                        <input
+                          type="number"
+                          value={editingComp.monthlyAdvertisingBudget || ""}
+                          onChange={(e) =>
+                            setEditingComp({ ...editingComp, monthlyAdvertisingBudget: Number(e.target.value) || 0 })
+                          }
+                          placeholder="20000"
+                          className="w-full p-2 bg-white border border-amber-200 rounded-xl font-mono focus:border-amber-500 outline-hidden"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-amber-900">ملاحظات العقد والخدمة:</label>
+                      <textarea
+                        rows={2}
+                        value={editingComp.serviceNotes || ""}
+                        onChange={(e) =>
+                          setEditingComp({ ...editingComp, serviceNotes: e.target.value })
+                        }
+                        placeholder="تفاصيل إضافية حول عقد تقديم الخدمة والدعم الفني والمبيعات..."
+                        className="w-full p-2 bg-white border border-amber-200 rounded-xl focus:border-amber-500 outline-hidden resize-none"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Status checkbox */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="space-y-1">
                       <label className="font-bold text-[#111111]">
                         حالة التفعيل للمستخدم الحالي:
@@ -789,6 +1129,381 @@ export const CompaniesView: React.FC = () => {
                     </button>
                   </div>
                 </form>
+              )}
+
+              {/* Tab: Employees & Salaries (الموظفون والرواتب وعمولات المبيعات) */}
+              {activeTabInModal === "employees" && (
+                <div className="space-y-5 text-xs">
+                  {/* Summary Header */}
+                  <div className="p-4 bg-[#F8F8F5] border border-[#EAEAEA] rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 font-bold text-[#111111]">
+                        <Users className="w-4 h-4 text-[#C8A75A]" />
+                        <span className="text-sm">إدارة موظفي شركة {editingComp.name}</span>
+                      </div>
+                      <p className="text-[11px] text-[#6B7280]">
+                        تحديد الراتب الأساسي الشهري، قواعد احتساب العمولات، تاريخ البداية، وحالة النشاط.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (showAddEmployeeForm && !editingEmployeeId) {
+                          resetEmployeeForm();
+                        } else {
+                          resetEmployeeForm();
+                          setShowAddEmployeeForm(true);
+                        }
+                      }}
+                      className="flex items-center gap-1.5 px-3.5 py-2 bg-[#111111] hover:bg-[#222222] text-[#C8A75A] font-bold rounded-xl shadow-xs transition-colors cursor-pointer text-xs"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>{showAddEmployeeForm && !editingEmployeeId ? "إغلاق النموذج" : "إضافة موظف جديد"}</span>
+                    </button>
+                  </div>
+
+                  {/* Summary Metric Cards */}
+                  {(() => {
+                    const compEmps = employees.filter((e) => e.companyId === editingComp.id);
+                    const activeEmps = compEmps.filter((e) => e.active !== false);
+                    const totalMonthlySalary = compEmps.reduce((acc, curr) => acc + (Number(curr.monthlySalary) || 0), 0);
+
+                    return (
+                      <div className="grid grid-cols-3 gap-2.5 text-center">
+                        <div className="p-3 bg-white border border-[#EAEAEA] rounded-xl shadow-2xs">
+                          <span className="text-[10px] text-[#6B7280] block">إجمالي الموظفين</span>
+                          <strong className="text-base font-bold text-[#111111]">{compEmps.length}</strong>
+                        </div>
+                        <div className="p-3 bg-white border border-[#EAEAEA] rounded-xl shadow-2xs">
+                          <span className="text-[10px] text-[#6B7280] block">الموظفون النشطون</span>
+                          <strong className="text-base font-bold text-emerald-600">{activeEmps.length}</strong>
+                        </div>
+                        <div className="p-3 bg-white border border-[#EAEAEA] rounded-xl shadow-2xs">
+                          <span className="text-[10px] text-[#6B7280] block">إجمالي مسير الرواتب</span>
+                          <strong className="text-base font-bold text-[#C8A75A] font-mono">
+                            {totalMonthlySalary.toLocaleString()} ج.م
+                          </strong>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Add / Edit Employee Form */}
+                  {showAddEmployeeForm && (
+                    <form onSubmit={handleSaveEmployee} className="p-4 bg-white border-2 border-[#C8A75A]/40 rounded-2xl space-y-4 shadow-sm">
+                      <div className="flex items-center justify-between pb-2 border-b border-[#F0F0EE]">
+                        <h4 className="font-bold text-sm text-[#111111] flex items-center gap-2">
+                          <Briefcase className="w-4 h-4 text-[#C8A75A]" />
+                          <span>{editingEmployeeId ? "تعديل بيانات الموظف" : "إضافة موظف جديد للشركة"}</span>
+                        </h4>
+                        <button
+                          type="button"
+                          onClick={resetEmployeeForm}
+                          className="text-[#9CA3AF] hover:text-[#111111] cursor-pointer"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <label className="font-bold text-[#111111]">اسم الموظف *:</label>
+                          <input
+                            type="text"
+                            required
+                            value={empName}
+                            onChange={(e) => setEmpName(e.target.value)}
+                            placeholder="مثال: أحمد محمود"
+                            className="w-full p-2 bg-[#F8F8F5] border border-[#EAEAEA] rounded-xl font-bold focus:border-[#C8A75A] outline-hidden"
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="font-bold text-[#111111]">المسمى الوظيفي / الدور *:</label>
+                          <input
+                            type="text"
+                            required
+                            value={empRole}
+                            onChange={(e) => setEmpRole(e.target.value)}
+                            placeholder="مهندس مبيعات / فني تركيبات / مشرف..."
+                            className="w-full p-2 bg-[#F8F8F5] border border-[#EAEAEA] rounded-xl focus:border-[#C8A75A] outline-hidden"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <label className="font-bold text-[#111111]">رقم الهاتف:</label>
+                          <input
+                            type="tel"
+                            value={empPhone}
+                            onChange={(e) => setEmpPhone(e.target.value)}
+                            placeholder="010XXXXXXXX"
+                            className="w-full p-2 bg-[#F8F8F5] border border-[#EAEAEA] rounded-xl font-mono focus:border-[#C8A75A] outline-hidden"
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="font-bold text-[#111111]">البريد الإلكتروني:</label>
+                          <input
+                            type="email"
+                            value={empEmail}
+                            onChange={(e) => setEmpEmail(e.target.value)}
+                            placeholder="employee@example.com"
+                            className="w-full p-2 bg-[#F8F8F5] border border-[#EAEAEA] rounded-xl font-mono focus:border-[#C8A75A] outline-hidden"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-[#F0F0EE]">
+                        <div className="space-y-1">
+                          <label className="font-bold text-[#111111]">الراتب الأساسي الشهري (ج.م) *:</label>
+                          <div className="relative">
+                            <input
+                              type="number"
+                              min={0}
+                              step={500}
+                              required
+                              value={empSalary}
+                              onChange={(e) => setEmpSalary(Number(e.target.value))}
+                              className="w-full p-2 pl-12 bg-[#F8F8F5] border border-[#EAEAEA] rounded-xl font-mono font-bold text-[#111111] focus:border-[#C8A75A] outline-hidden"
+                            />
+                            <span className="absolute left-3 top-2.5 text-[11px] font-bold text-[#6B7280]">
+                              ج.م
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="font-bold text-[#111111]">تاريخ بداية العمل / التعيين:</label>
+                          <input
+                            type="date"
+                            value={empStartDate}
+                            onChange={(e) => setEmpStartDate(e.target.value)}
+                            className="w-full p-2 bg-[#F8F8F5] border border-[#EAEAEA] rounded-xl font-mono focus:border-[#C8A75A] outline-hidden"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Commission Rules Configuration */}
+                      <div className="p-3.5 bg-[#F8F8F5] rounded-xl border border-[#EAEAEA] space-y-3">
+                        <div className="flex items-center gap-2 font-bold text-[#111111]">
+                          <Award className="w-4 h-4 text-[#C8A75A]" />
+                          <span>إعدادات ونظام العمولة (Commission Rules):</span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div className="space-y-1">
+                            <label className="text-[11px] font-bold text-[#6B7280]">قاعدة الاحتساب:</label>
+                            <select
+                              value={empCommissionRule}
+                              onChange={(e) => setEmpCommissionRule(e.target.value as any)}
+                              className="w-full p-2 bg-white border border-[#EAEAEA] rounded-xl text-xs font-bold focus:border-[#C8A75A] outline-hidden cursor-pointer"
+                            >
+                              <option value="percentage_of_contract">نسبة من إجمالي قيمة العقد</option>
+                              <option value="percentage_of_collection">نسبة من المبالغ المحصلة فعلياً</option>
+                              <option value="fixed_per_contract">مبلغ ثابت لكل عقد مبرم</option>
+                            </select>
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[11px] font-bold text-[#6B7280]">
+                              {empCommissionRule === "fixed_per_contract" ? "قيمة العمولة (ج.م):" : "نسبة العمولة (%):"}
+                            </label>
+                            <input
+                              type="number"
+                              min={0}
+                              step={empCommissionRule === "fixed_per_contract" ? 100 : 0.25}
+                              value={empCommissionPercentage}
+                              onChange={(e) => setEmpCommissionPercentage(Number(e.target.value))}
+                              className="w-full p-2 bg-white border border-[#EAEAEA] rounded-xl font-mono font-bold text-xs focus:border-[#C8A75A] outline-hidden"
+                            />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[11px] font-bold text-[#6B7280]">توقيت الصرف والاستحقاق:</label>
+                            <select
+                              value={empCommissionTiming}
+                              onChange={(e) => setEmpCommissionTiming(e.target.value as any)}
+                              className="w-full p-2 bg-white border border-[#EAEAEA] rounded-xl text-xs font-bold focus:border-[#C8A75A] outline-hidden cursor-pointer"
+                            >
+                              <option value="contract_signing">عند توقيع العقد</option>
+                              <option value="down_payment">عند سداد الدفعة المقدمة</option>
+                              <option value="full_collection">عند اكتمال التحصيل</option>
+                              <option value="custom">مخصص حسب الاتفاق</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-bold text-[#6B7280]">ملاحظات وشروط خاصة بالعمولة:</label>
+                          <input
+                            type="text"
+                            value={empCommissionNotes}
+                            onChange={(e) => setEmpCommissionNotes(e.target.value)}
+                            placeholder="مثال: تستحق العمولة بعد اعتماد مهندس الجودة..."
+                            className="w-full p-2 bg-white border border-[#EAEAEA] rounded-xl text-xs focus:border-[#C8A75A] outline-hidden"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Active Status & Buttons */}
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
+                        <label className="flex items-center gap-2 cursor-pointer font-bold">
+                          <input
+                            type="checkbox"
+                            checked={empActive}
+                            onChange={(e) => setEmpActive(e.target.checked)}
+                            className="w-4 h-4 accent-[#C8A75A] rounded-md cursor-pointer"
+                          />
+                          <span>الموظف نشط حالياً بالشركة (Active)</span>
+                        </label>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={resetEmployeeForm}
+                            className="px-4 py-2 bg-stone-100 hover:bg-stone-200 text-[#6B7280] font-bold rounded-xl cursor-pointer"
+                          >
+                            إلغاء
+                          </button>
+                          <button
+                            type="submit"
+                            className="px-5 py-2 bg-[#111111] hover:bg-[#222222] text-[#C8A75A] font-bold rounded-xl shadow-xs cursor-pointer"
+                          >
+                            {editingEmployeeId ? "حفظ التعديلات" : "إضافة الموظف الآن"}
+                          </button>
+                        </div>
+                      </div>
+                    </form>
+                  )}
+
+                  {/* Employees List Table */}
+                  <div className="space-y-2">
+                    <h4 className="font-bold text-xs text-[#111111] flex items-center justify-between">
+                      <span>قائمة موظفي الشركة:</span>
+                      <span className="text-[11px] text-[#6B7280]">
+                        ({employees.filter((e) => e.companyId === editingComp.id).length} موظف مسجل)
+                      </span>
+                    </h4>
+
+                    {(() => {
+                      const compEmps = employees.filter((e) => e.companyId === editingComp.id);
+                      if (compEmps.length === 0) {
+                        return (
+                          <div className="p-8 text-center bg-[#F8F8F5] border border-dashed border-[#EAEAEA] rounded-2xl space-y-2">
+                            <Users className="w-8 h-8 text-[#9CA3AF] mx-auto opacity-50" />
+                            <p className="font-bold text-[#111111]">لا يوجد موظفون مسجلون في هذه الشركة حتى الآن</p>
+                            <p className="text-[11px] text-[#6B7280]">
+                              اضغط على زر "إضافة موظف جديد" لتسجيل الموظفين والرواتب وقواعد العمولات.
+                            </p>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div className="space-y-2">
+                          {compEmps.map((emp) => {
+                            const isEmpActive = emp.active !== false;
+                            return (
+                              <div
+                                key={emp.id}
+                                className="p-3.5 bg-white border border-[#EAEAEA] rounded-2xl shadow-2xs hover:border-[#C8A75A]/50 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                              >
+                                <div className="flex items-start gap-3">
+                                  <div
+                                    className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 ${
+                                      isEmpActive
+                                        ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                        : "bg-stone-100 text-stone-500 border border-stone-200"
+                                    }`}
+                                  >
+                                    {emp.name.slice(0, 2)}
+                                  </div>
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <strong className="font-bold text-sm text-[#111111]">{emp.name}</strong>
+                                      <span
+                                        className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
+                                          isEmpActive
+                                            ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                            : "bg-stone-100 text-stone-600 border border-stone-200"
+                                        }`}
+                                      >
+                                        {isEmpActive ? "نشط" : "معطل"}
+                                      </span>
+                                      <span className="text-[11px] text-[#6B7280] font-medium">({emp.role})</span>
+                                    </div>
+
+                                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[#6B7280] mt-1">
+                                      {emp.phone && (
+                                        <span className="flex items-center gap-1 font-mono">
+                                          <Phone className="w-3 h-3 text-[#9CA3AF]" />
+                                          <span>{emp.phone}</span>
+                                        </span>
+                                      )}
+                                      {emp.startDate && (
+                                        <span className="flex items-center gap-1 font-mono">
+                                          <Calendar className="w-3 h-3 text-[#9CA3AF]" />
+                                          <span>بداية: {emp.startDate}</span>
+                                        </span>
+                                      )}
+                                      {emp.commissionRule && (
+                                        <span className="px-2 py-0.5 bg-amber-50 text-amber-800 border border-amber-200 rounded-lg text-[10px] font-bold">
+                                          عمولة: {emp.commissionPercentage}
+                                          {emp.commissionRule === "fixed_per_contract" ? " ج.م ثابت" : "%"}
+                                          {emp.commissionRule === "percentage_of_contract"
+                                            ? " (عقد)"
+                                            : emp.commissionRule === "percentage_of_collection"
+                                            ? " (تحصيل)"
+                                            : ""}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-[#F0F0EE]">
+                                  <div className="text-right">
+                                    <span className="text-[10px] text-[#6B7280] block">الراتب الأساسي</span>
+                                    <strong className="text-xs font-mono font-bold text-[#111111]">
+                                      {(emp.monthlySalary || 0).toLocaleString()} ج.م
+                                    </strong>
+                                  </div>
+
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleEmployeeStatus(emp.id)}
+                                      className={`p-1.5 rounded-xl transition-colors cursor-pointer ${
+                                        isEmpActive
+                                          ? "text-stone-500 hover:text-amber-600 hover:bg-amber-50"
+                                          : "text-stone-400 hover:text-emerald-600 hover:bg-emerald-50"
+                                      }`}
+                                      title={isEmpActive ? "تعطيل الموظف" : "تنشيط الموظف"}
+                                    >
+                                      {isEmpActive ? <UserX className="w-4 h-4" /> : <UserCheck className="w-4 h-4" />}
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => startEditEmployee(emp)}
+                                      className="p-1.5 text-[#6B7280] hover:text-[#111111] hover:bg-[#F8F8F5] rounded-xl transition-colors cursor-pointer"
+                                      title="تعديل بيانات الموظف والراتب والعمولة"
+                                    >
+                                      <Edit2 className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
               )}
 
               {/* Tab 2: Targets (الأهداف البيعية) */}
@@ -1135,7 +1850,7 @@ export const CompaniesView: React.FC = () => {
       {/* Add Company Modal */}
       {showAdd && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-[#EAEAEA] overflow-hidden animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border border-[#EAEAEA] overflow-hidden animate-in fade-in">
             <div className="p-4 bg-[#111111] text-white flex items-center justify-between border-b border-[#222222]">
               <div className="flex items-center gap-2">
                 <Building2 className="w-4 h-4 text-[#C8A75A]" />
@@ -1149,124 +1864,217 @@ export const CompaniesView: React.FC = () => {
               </button>
             </div>
 
-            <form onSubmit={handleCreate} className="p-5 space-y-3.5 text-xs">
-              <div className="space-y-1">
-                <label className="font-bold text-[#111111]">اسم الشركة بالعربية *:</label>
-                <input
-                  type="text"
-                  required
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="مثال: شركة النور للألوميتال وUPVC"
-                  className="w-full p-2.5 bg-[#F8F8F5] border border-[#EAEAEA] rounded-xl font-bold focus:border-[#C8A75A] outline-hidden"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="font-bold text-[#111111]">اسم الشركة بالإنجليزية:</label>
-                <input
-                  type="text"
-                  value={nameEn}
-                  onChange={(e) => setNameEn(e.target.value)}
-                  placeholder="e.g. Al-Noor Aluminium & UPVC"
-                  className="w-full p-2.5 bg-[#F8F8F5] border border-[#EAEAEA] rounded-xl font-mono focus:border-[#C8A75A] outline-hidden"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="font-bold text-[#111111]">رقم هاتف الشركة:</label>
-                <input
-                  type="text"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="01012345678"
-                  className="w-full p-2.5 bg-[#F8F8F5] border border-[#EAEAEA] rounded-xl focus:border-[#C8A75A] outline-hidden"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="font-bold text-[#111111]">الهدف الشهري (ج.م) *:</label>
-                  <input
-                    type="number"
-                    step={10000}
-                    required
-                    value={monthlyTarget}
-                    onChange={(e) => setMonthlyTarget(Number(e.target.value))}
-                    className="w-full p-2.5 bg-[#F8F8F5] border border-[#EAEAEA] rounded-xl font-mono font-bold focus:border-[#C8A75A] outline-hidden"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="font-bold text-[#111111]">الهدف السنوي (ج.م):</label>
-                  <input
-                    type="number"
-                    step={50000}
-                    value={annualTarget}
-                    onChange={(e) => setAnnualTarget(Number(e.target.value))}
-                    className="w-full p-2.5 bg-[#F8F8F5] border border-[#EAEAEA] rounded-xl font-mono font-bold focus:border-[#C8A75A] outline-hidden"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="font-bold text-[#111111]">اللون الأساسي:</label>
-                  <div className="flex items-center gap-2">
+            <form onSubmit={handleCreate} className="text-xs">
+              <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="font-bold text-[#111111]">اسم الشركة بالعربية *:</label>
                     <input
-                      type="color"
-                      value={color}
-                      onChange={(e) => setColor(e.target.value)}
-                      className="w-9 h-9 p-1 rounded-xl border border-[#EAEAEA] cursor-pointer"
+                      type="text"
+                      required
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="مثال: شركة النور للألوميتال وUPVC"
+                      className="w-full p-2.5 bg-[#F8F8F5] border border-[#EAEAEA] rounded-xl font-bold focus:border-[#C8A75A] outline-hidden"
                     />
-                    <span className="font-mono text-[11px] text-[#6B7280]">{color}</span>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="font-bold text-[#111111]">اسم الشركة بالإنجليزية:</label>
+                    <input
+                      type="text"
+                      value={nameEn}
+                      onChange={(e) => setNameEn(e.target.value)}
+                      placeholder="e.g. Al-Noor Aluminium & UPVC"
+                      className="w-full p-2.5 bg-[#F8F8F5] border border-[#EAEAEA] rounded-xl font-mono focus:border-[#C8A75A] outline-hidden"
+                    />
                   </div>
                 </div>
 
-                <div className="space-y-1">
-                  <label className="font-bold text-[#111111]">اللون الثانوي:</label>
-                  <div className="flex items-center gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="space-y-1">
+                    <label className="font-bold text-[#111111]">رقم هاتف الشركة:</label>
                     <input
-                      type="color"
-                      value={secondaryColor}
-                      onChange={(e) => setSecondaryColor(e.target.value)}
-                      className="w-9 h-9 p-1 rounded-xl border border-[#EAEAEA] cursor-pointer"
+                      type="text"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      placeholder="01012345678"
+                      className="w-full p-2.5 bg-[#F8F8F5] border border-[#EAEAEA] rounded-xl focus:border-[#C8A75A] outline-hidden"
                     />
-                    <span className="font-mono text-[11px] text-[#6B7280]">
-                      {secondaryColor}
-                    </span>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="font-bold text-[#111111]">البريد الإلكتروني:</label>
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="info@company.com"
+                      className="w-full p-2.5 bg-[#F8F8F5] border border-[#EAEAEA] rounded-xl focus:border-[#C8A75A] outline-hidden"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="font-bold text-[#111111]">عنوان وموقع الشركة:</label>
+                    <input
+                      type="text"
+                      value={address}
+                      onChange={(e) => setAddress(e.target.value)}
+                      placeholder="العنوان أو المنطقة"
+                      className="w-full p-2.5 bg-[#F8F8F5] border border-[#EAEAEA] rounded-xl focus:border-[#C8A75A] outline-hidden"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="font-bold text-[#111111]">الهدف الشهري (ج.م) *:</label>
+                    <input
+                      type="number"
+                      step={10000}
+                      required
+                      value={monthlyTarget}
+                      onChange={(e) => setMonthlyTarget(Number(e.target.value))}
+                      className="w-full p-2.5 bg-[#F8F8F5] border border-[#EAEAEA] rounded-xl font-mono font-bold focus:border-[#C8A75A] outline-hidden"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="font-bold text-[#111111]">الهدف السنوي (ج.م):</label>
+                    <input
+                      type="number"
+                      step={50000}
+                      value={annualTarget}
+                      onChange={(e) => setAnnualTarget(Number(e.target.value))}
+                      className="w-full p-2.5 bg-[#F8F8F5] border border-[#EAEAEA] rounded-xl font-mono font-bold focus:border-[#C8A75A] outline-hidden"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="font-bold text-[#111111]">اللون الأساسي:</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={color}
+                        onChange={(e) => setColor(e.target.value)}
+                        className="w-9 h-9 p-1 rounded-xl border border-[#EAEAEA] cursor-pointer"
+                      />
+                      <span className="font-mono text-[11px] text-[#6B7280]">{color}</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="font-bold text-[#111111]">اللون الثانوي:</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={secondaryColor}
+                        onChange={(e) => setSecondaryColor(e.target.value)}
+                        className="w-9 h-9 p-1 rounded-xl border border-[#EAEAEA] cursor-pointer"
+                      />
+                      <span className="font-mono text-[11px] text-[#6B7280]">
+                        {secondaryColor}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Logo Upload */}
+                <div className="space-y-1">
+                  <label className="font-bold text-[#111111]">شعار الشركة:</label>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => addFileInputRef.current?.click()}
+                      className="flex-1 flex items-center justify-center gap-1.5 p-2 bg-[#F8F8F5] border border-[#EAEAEA] hover:border-[#C8A75A] rounded-xl cursor-pointer text-xs font-bold"
+                    >
+                      <Upload className="w-3.5 h-3.5 text-[#C8A75A]" />
+                      <span>رفع صورة الشعار</span>
+                    </button>
+                    <input
+                      ref={addFileInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => handleFileUpload(e, setLogoUrl)}
+                    />
+                  </div>
+                  {logoUrl && (
+                    <p className="text-[10px] text-emerald-600 font-bold">
+                      ✓ تم اختيار صورة الشعار بنجاح
+                    </p>
+                  )}
+                </div>
+
+                {/* NESTA Service Plan Fields (Add) */}
+                <div className="p-4 bg-amber-50/50 rounded-2xl border border-amber-200/60 space-y-3">
+                  <h4 className="font-bold text-xs text-amber-900 flex items-center gap-1.5 border-b border-amber-200/40 pb-2">
+                    <ShieldAlert className="w-4 h-4 text-amber-600" />
+                    <span>بيانات باقة وعقد خدمة NESTA للشركة الجديدة</span>
+                  </h4>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="font-bold text-amber-900">باقة الخدمة (Service Plan):</label>
+                      <input
+                        type="text"
+                        value={servicePlan}
+                        onChange={(e) => setServicePlan(e.target.value)}
+                        placeholder="لوحة تحكم احترافية للشركات"
+                        className="w-full p-2 bg-white border border-amber-200 rounded-xl focus:border-amber-500 outline-hidden"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-amber-900">سعر الخدمة الشهري (ج.م):</label>
+                      <input
+                        type="number"
+                        value={monthlyServicePrice}
+                        onChange={(e) => setMonthlyServicePrice(Number(e.target.value) || 0)}
+                        className="w-full p-2 bg-white border border-amber-200 rounded-xl font-mono focus:border-amber-500 outline-hidden"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-amber-900">تاريخ بدء العقد:</label>
+                      <input
+                        type="date"
+                        value={serviceStartDate}
+                        onChange={(e) => setServiceStartDate(e.target.value)}
+                        className="w-full p-2 bg-white border border-amber-200 rounded-xl focus:border-amber-500 outline-hidden text-xs"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-amber-900">دورة الفوترة:</label>
+                      <select
+                        value={billingCycle}
+                        onChange={(e) => setBillingCycle(e.target.value as any)}
+                        className="w-full p-2 bg-white border border-amber-200 rounded-xl focus:border-amber-500 outline-hidden"
+                      >
+                        <option value="Monthly">شهري (Monthly)</option>
+                        <option value="Quarterly">ربع سنوي (Quarterly)</option>
+                        <option value="Yearly">سنوي (Yearly)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="font-bold text-amber-900">ملاحظات باقة الخدمة:</label>
+                    <textarea
+                      rows={2}
+                      value={serviceNotes}
+                      onChange={(e) => setServiceNotes(e.target.value)}
+                      placeholder="تفاصيل إضافية حول عقد تقديم الخدمة والدعم الفني والمبيعات..."
+                      className="w-full p-2 bg-white border border-amber-200 rounded-xl focus:border-amber-500 outline-hidden resize-none"
+                    />
                   </div>
                 </div>
               </div>
 
-              {/* Logo Upload */}
-              <div className="space-y-1">
-                <label className="font-bold text-[#111111]">شعار الشركة:</label>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => addFileInputRef.current?.click()}
-                    className="flex-1 flex items-center justify-center gap-1.5 p-2 bg-[#F8F8F5] border border-[#EAEAEA] hover:border-[#C8A75A] rounded-xl cursor-pointer text-xs font-bold"
-                  >
-                    <Upload className="w-3.5 h-3.5 text-[#C8A75A]" />
-                    <span>رفع صورة الشعار</span>
-                  </button>
-                  <input
-                    ref={addFileInputRef}
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={(e) => handleFileUpload(e, setLogoUrl)}
-                  />
-                </div>
-                {logoUrl && (
-                  <p className="text-[10px] text-emerald-600 font-bold">
-                    ✓ تم اختيار صورة الشعار بنجاح
-                  </p>
-                )}
-              </div>
-
-              <div className="flex justify-end gap-2 pt-3 border-t border-[#F0F0EE]">
+              <div className="p-4 bg-[#F8F8F5] flex justify-end gap-2 border-t border-[#F0F0EE]">
                 <button
                   type="button"
                   onClick={() => setShowAdd(false)}
@@ -1276,7 +2084,7 @@ export const CompaniesView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-[#111111] hover:bg-[#222222] text-[#C8A75A] font-bold rounded-xl shadow-xs cursor-pointer"
+                  className="px-5 py-2.5 bg-[#111111] hover:bg-[#222222] text-[#C8A75A] font-bold rounded-xl shadow-xs cursor-pointer"
                 >
                   حفظ الشركة
                 </button>

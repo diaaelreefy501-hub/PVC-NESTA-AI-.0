@@ -243,6 +243,12 @@ export const CollectionsView: React.FC = () => {
     closed: { label: "مغلق", color: "text-slate-700", bg: "bg-slate-100 border-slate-200" },
     completed: { label: "مكتمل", color: "text-emerald-700", bg: "bg-emerald-100 border-emerald-200" },
     partial: { label: "تحصيل جزئي", color: "text-amber-700", bg: "bg-amber-100 border-amber-200" },
+    scheduled: { label: "مجدول", color: "text-sky-700", bg: "bg-sky-100 border-sky-200" },
+    due: { label: "مستحق", color: "text-amber-700", bg: "bg-amber-100 border-amber-200" },
+    partially_paid: { label: "مسدد جزئياً", color: "text-blue-700", bg: "bg-blue-100 border-blue-200" },
+    paid: { label: "مسدد بالكامل", color: "text-emerald-700", bg: "bg-emerald-100 border-emerald-200" },
+    overdue: { label: "متأخر", color: "text-rose-700", bg: "bg-rose-100 border-rose-200" },
+    cancelled: { label: "ملغى", color: "text-slate-500", bg: "bg-slate-100 border-slate-200" },
   };
 
   return (

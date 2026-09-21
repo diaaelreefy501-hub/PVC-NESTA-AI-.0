@@ -87,6 +87,7 @@ export const AnalyticsView: React.FC = () => {
     setSelectedCustomerIdFor360,
     calculateContractedSalesTotal,
     payments,
+    unifiedKPIs,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<AnalyticsTab>("overview");
@@ -306,11 +307,40 @@ export const AnalyticsView: React.FC = () => {
   }, [filteredSalesData]);
 
   const totalPaymentsAmount = useMemo(() => {
-    const directPaymentsSum = filteredPaymentsData.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
-    if (directPaymentsSum > 0) return directPaymentsSum;
-    const contractPaidSum = filteredContractsData.reduce((sum, c) => sum + (Number(c.paidAmount) || 0), 0);
-    return Math.max(directPaymentsSum, contractPaidSum);
-  }, [filteredPaymentsData, filteredContractsData]);
+    // If we are looking at all companies and no specific period filter is active in AnalyticsView,
+    // we use the unifiedKPIs.collections.totalAmount which correctly handles the 520k legacy-to-payments reconciliation logic
+    if (selectedCompanyId === "all" && activeCompanyId === "all") {
+      return unifiedKPIs.collections.totalAmount;
+    }
+    
+    // Fallback logic that mirrors kpiEngine's robust approach
+    const paymentsByContract = new Map<string, number>();
+    let directPaymentsSum = 0;
+
+    filteredPaymentsData.forEach((p) => {
+      if (p.status === "reversed" || p.status === "refunded") return;
+      const amt = Number(p.amount) || 0;
+      if (p.contractId) {
+        paymentsByContract.set(p.contractId, (paymentsByContract.get(p.contractId) || 0) + amt);
+      } else {
+        directPaymentsSum += amt;
+      }
+    });
+
+    let contractCollectionsSum = 0;
+    filteredContractsData.forEach((c) => {
+      if (paymentsByContract.has(c.id)) {
+        contractCollectionsSum += paymentsByContract.get(c.id)!;
+      } else {
+        const legacyPaid = Number(c.paidAmount) || 0;
+        if (legacyPaid > 0) {
+          contractCollectionsSum += legacyPaid;
+        }
+      }
+    });
+
+    return contractCollectionsSum + directPaymentsSum;
+  }, [filteredPaymentsData, filteredContractsData, unifiedKPIs, selectedCompanyId, activeCompanyId]);
 
   const totalContractsCount = filteredContractsData.length;
   const avgDealSize = totalContractsCount > 0 ? Math.round(totalContractsAmount / totalContractsCount) : 0;

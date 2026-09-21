@@ -2,6 +2,7 @@ import React, { useState, useMemo } from "react";
 import { useApp } from "../../context/AppContext";
 import { FollowUp } from "../../types";
 import { SmartSalesCycleAuditModal } from "./SmartSalesCycleAuditModal";
+import { runSalesCycleAudit } from "../../utils/salesCycleIntegrityEngine";
 import {
   CalendarDays,
   AlertCircle,
@@ -23,6 +24,9 @@ import {
   Bell,
   CheckCheck,
   ArrowUpRight,
+  ShieldCheck,
+  Zap,
+  AlertTriangle,
 } from "lucide-react";
 
 export const MyDayView: React.FC = () => {
@@ -43,46 +47,55 @@ export const MyDayView: React.FC = () => {
     activeCompany,
     activeCompanyId,
     migrateLegacyData,
+    customers,
     contracts,
     quotations,
     opportunities,
+    sales,
     inquiries,
+    followUps,
+    inspections,
+    payments,
   } = useApp();
 
   const [activeFilter, setActiveFilter] = useState<
     "all" | "alerts" | "overdue" | "today" | "hot" | "quotes"
   >("all");
 
-  const [isMigrating, setIsMigrating] = useState(false);
   const [showSmartSyncModal, setShowSmartSyncModal] = useState(false);
 
-  // Auto-detect contracts that do not have linked quotations
-  const contractsWithoutQuotes = useMemo(() => {
-    return contracts.filter(
-      (c) => !c.quotationId || !quotations.some((q) => q.id === c.quotationId)
+  // Live Sales Cycle Audit calculation
+  const liveAuditSummary = useMemo(() => {
+    return runSalesCycleAudit(
+      {
+        customers,
+        companies,
+        contracts,
+        quotations,
+        opportunities,
+        sales,
+        inquiries,
+        followUps,
+        inspections,
+        payments,
+      },
+      activeCompanyId
     );
-  }, [contracts, quotations]);
+  }, [
+    customers,
+    companies,
+    contracts,
+    quotations,
+    opportunities,
+    sales,
+    inquiries,
+    followUps,
+    inspections,
+    payments,
+    activeCompanyId,
+  ]);
 
-  // Auto-detect quotations that do not have linked opportunities
-  const quotesWithoutOpps = useMemo(() => {
-    return quotations.filter(
-      (q) => !opportunities.some((o) => o.quotationId === q.id || (o.customerId === q.customerId && o.companyId === q.companyId))
-    );
-  }, [quotations, opportunities]);
-
-  const hasUnlinkedData = contractsWithoutQuotes.length > 0 || quotesWithoutOpps.length > 0;
-
-  const handleRunMigration = async () => {
-    setIsMigrating(true);
-    try {
-      await migrateLegacyData();
-    } catch (e) {
-      console.error("Migration error:", e);
-    } finally {
-      setIsMigrating(false);
-    }
-  };
-
+  // Reschedule helper
   const handleRescheduleDays = (id: string, days: number) => {
     const d = new Date();
     d.setDate(d.getDate() + days);
@@ -128,47 +141,78 @@ export const MyDayView: React.FC = () => {
         </div>
       </div>
 
-      {/* Migration Banner - Shows when unlinked contracts or quotations exist */}
-      {hasUnlinkedData && (
-        <div className="bg-gradient-to-r from-amber-50 via-emerald-50 to-teal-50 border border-emerald-300 p-4 sm:p-5 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm">
-          <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center shrink-0 border border-emerald-200">
-              <Sparkles className="w-5 h-5 text-emerald-700" />
+      {/* Sales Cycle Integrity & Repair Engine Card */}
+      <div className="bg-gradient-to-br from-slate-900 via-slate-850 to-indigo-950 text-white p-5 sm:p-6 rounded-3xl border border-slate-800 shadow-xl flex flex-col gap-5">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex items-start gap-3.5">
+            <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-400/30 flex items-center justify-center text-amber-400 shrink-0 shadow-inner">
+              <ShieldCheck className="w-6 h-6" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h3 className="font-black text-sm sm:text-base text-emerald-950">
-                  تطبيق الدورة البيعية وربط البيانات الحالية
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="font-black text-base sm:text-lg text-white">
+                  فحص سلامة الدورة البيعية — Sales Cycle Integrity Engine
                 </h3>
-                <span className="px-2 py-0.5 bg-amber-100 text-amber-800 text-xs font-bold rounded-full border border-amber-200">
-                  بحاجة لمزامنة ({contractsWithoutQuotes.length + quotesWithoutOpps.length})
+                <span className="px-2.5 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 rounded-lg text-xs font-bold">
+                  فحص مباشر للبيانات
                 </span>
               </div>
-              <p className="text-xs sm:text-sm text-emerald-900 mt-1 leading-relaxed">
-                يوجد بيانات تحتاج لربط مباشر:{" "}
-                {contractsWithoutQuotes.length > 0 && (
-                  <span className="font-semibold text-amber-900 ml-2">
-                    {contractsWithoutQuotes.length} عقد مبيعات بدون عرض سعر،
-                  </span>
-                )}
-                {quotesWithoutOpps.length > 0 && (
-                  <span className="font-semibold text-emerald-900 ml-2">
-                    {quotesWithoutOpps.length} عرض سعر غير مسجل كفرصة بيعية مفتوحة،
-                  </span>
-                )}
-                اضغط لفتح محرك الفحص الذكي وتطبيق الربط الكامل وتوليد عروض الأسعار والفرص فوراً بدون فقدان أي بيانات.
+              <p className="text-xs sm:text-sm text-slate-300 mt-1 leading-relaxed max-w-3xl">
+                فحص العلاقات والفجوات بين كافة مراحل دورة البيع الحالية (الاستفسارات ← المعاينات ← العروض ← العقود ← المبيعات ← التحصيلات).
               </p>
             </div>
           </div>
-          <button
-            onClick={() => setShowSmartSyncModal(true)}
-            className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-xl shrink-0 transition-all cursor-pointer shadow-sm flex items-center gap-2"
-          >
-            <Sparkles className="w-4 h-4 text-emerald-200" />
-            <span>فحص وتطبيق وربط البيانات الآن ✨</span>
-          </button>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => setShowSmartSyncModal(true)}
+              className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs sm:text-sm rounded-xl transition-all cursor-pointer shadow-md flex items-center gap-2"
+            >
+              <Zap className="w-4 h-4 text-slate-950" />
+              <span>فحص النظام ومراجعة الإصلاحات</span>
+            </button>
+          </div>
         </div>
-      )}
+
+        {/* Live Integrity Indicators Summary */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-slate-800/80">
+          <div className="bg-slate-800/60 p-3 rounded-2xl border border-slate-700/60 flex items-center justify-between">
+            <div>
+              <span className="text-xs text-slate-400 font-semibold block">علاقات سليمة</span>
+              <span className="text-lg font-black text-emerald-400">{liveAuditSummary.healthyCount}</span>
+            </div>
+            <CheckCircle2 className="w-5 h-5 text-emerald-400/80" />
+          </div>
+
+          <div className="bg-slate-800/60 p-3 rounded-2xl border border-slate-700/60 flex items-center justify-between">
+            <div>
+              <span className="text-xs text-slate-400 font-semibold block">آمنة للإصلاح والربط</span>
+              <span className="text-lg font-black text-blue-400">
+                {liveAuditSummary.safeToRepairCount + liveAuditSummary.needsLinkCount}
+              </span>
+            </div>
+            <Zap className="w-5 h-5 text-blue-400/80" />
+          </div>
+
+          <div className="bg-slate-800/60 p-3 rounded-2xl border border-slate-700/60 flex items-center justify-between">
+            <div>
+              <span className="text-xs text-slate-400 font-semibold block">مطلوب مراجعة</span>
+              <span className="text-lg font-black text-amber-400">{liveAuditSummary.reviewRequiredCount}</span>
+            </div>
+            <AlertCircle className="w-5 h-5 text-amber-400/80" />
+          </div>
+
+          <div className="bg-slate-800/60 p-3 rounded-2xl border border-slate-700/60 flex items-center justify-between">
+            <div>
+              <span className="text-xs text-slate-400 font-semibold block">تعارضات وتكرار</span>
+              <span className="text-lg font-black text-rose-400">
+                {liveAuditSummary.conflictCount + liveAuditSummary.duplicateCount}
+              </span>
+            </div>
+            <AlertTriangle className="w-5 h-5 text-rose-400/80" />
+          </div>
+        </div>
+      </div>
 
       {/* KPI Cards: The What I Have Today Grid */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">

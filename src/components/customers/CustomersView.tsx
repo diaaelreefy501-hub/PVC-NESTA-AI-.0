@@ -533,6 +533,24 @@ export const CustomersView: React.FC = () => {
                   </div>
                 </div>
 
+                {/* Guardian Warning Reason */}
+                {guardianFilter !== 'all' && (
+                  <div className="bg-rose-500/10 border border-rose-500/30 p-2.5 rounded-xl space-y-1 text-right">
+                    <p className="text-[11px] font-black text-rose-400 flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5" />
+                      <span>تنبيه الحارس ({guardianFilter === 'intervention_required' ? 'يحتاج تدخل' : guardianFilter})</span>
+                    </p>
+                    {analyzeCustomerJourney(c, followUps, quotations, contracts, opportunities, new Date().toISOString().split('T')[0]).reasons.map((r, rIdx) => (
+                      <p key={rIdx} className="text-[10px] text-rose-300">{r}</p>
+                    ))}
+                    {analyzeCustomerJourney(c, followUps, quotations, contracts, opportunities, new Date().toISOString().split('T')[0]).nextAction && (
+                      <p className="text-[9px] text-[#A1A1AA] mt-1 border-t border-rose-500/20 pt-1">
+                        الإجراء التالي: <strong className="text-rose-200">{analyzeCustomerJourney(c, followUps, quotations, contracts, opportunities, new Date().toISOString().split('T')[0]).nextAction}</strong>
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 {/* Card Footer Actions */}
                 <div className="flex items-center justify-between pt-1 border-t border-[#292B2E]">
                   <div className="flex items-center gap-1.5">
@@ -645,6 +663,11 @@ export const CustomersView: React.FC = () => {
                         <span className="text-[10px] text-[#A1A1AA] font-mono block" dir="ltr">
                           {c.phone}
                         </span>
+                        {guardianFilter !== 'all' && (
+                          <div className="mt-1 bg-rose-500/10 border border-rose-500/20 p-1.5 rounded text-[10px] text-rose-300 max-w-xs leading-normal">
+                            ⚠️ {analyzeCustomerJourney(c, followUps, quotations, contracts, opportunities, new Date().toISOString().split('T')[0]).reasons.join(" | ")}
+                          </div>
+                        )}
                       </td>
                       <td className="p-3">
                         {comp && (

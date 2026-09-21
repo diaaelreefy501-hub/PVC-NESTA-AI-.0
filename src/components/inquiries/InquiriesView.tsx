@@ -18,6 +18,7 @@ import {
   TrendingUp,
   RefreshCw,
   Calendar,
+  CheckCircle2,
 } from "lucide-react";
 import { BulkActionBar, StatusOption } from "../common/BulkActionBar";
 import { SmartFilterBar, FilterState } from "../common/SmartFilterBar";
@@ -27,6 +28,10 @@ export const InquiriesView: React.FC = () => {
   const {
     filteredInquiries,
     companies,
+    opportunities,
+    quotations,
+    contracts,
+    canDeleteRecords,
     updateInquiryStage,
     updateInquiry,
     batchUpdateInquiries,
@@ -59,7 +64,7 @@ export const InquiriesView: React.FC = () => {
     endDate: navigationFilter?.date || "",
   });
 
-  const [interestTab, setInterestTab] = useState<"all" | "interested" | "not_interested">("all");
+  const [interestTab, setInterestTab] = useState<"all" | "interested" | "not_interested" | "closed">("all");
 
   // Sync navigationFilter when it changes
   useEffect(() => {
@@ -71,6 +76,7 @@ export const InquiriesView: React.FC = () => {
         startDate: navigationFilter.date || prev.startDate,
         endDate: navigationFilter.date || prev.endDate,
         datePreset: navigationFilter.date ? "custom" : prev.datePreset,
+        search: navigationFilter.searchQuery || prev.search,
       }));
     }
   }, [navigationFilter]);
@@ -78,14 +84,26 @@ export const InquiriesView: React.FC = () => {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [singleDeleteId, setSingleDeleteId] = useState<string | null>(null);
 
-  // Helper to determine if an inquiry is "not interested"
+  // Helper to determine if an inquiry is "not interested" (including cold and lost)
   const isNotInterestedInquiry = (inq: any) => {
     return (
       inq.stage === "lost" ||
       inq.interestLevel === "lost" ||
       inq.interestLevel === "cold" ||
       inq.isNotInterested === true ||
-      inq.status === "not_interested"
+      inq.status === "not_interested" ||
+      inq.status === "lost"
+    );
+  };
+
+  // Helper to determine if an inquiry is closed (won or lost)
+  const isClosedInquiry = (inq: any) => {
+    return (
+      inq.stage === "won" ||
+      inq.stage === "contracted" ||
+      inq.stage === "lost" ||
+      inq.interestLevel === "lost" ||
+      inq.status === "lost"
     );
   };
 
@@ -96,22 +114,28 @@ export const InquiriesView: React.FC = () => {
   }, [filteredInquiries, filters.companyId]);
 
   const interestedInquiriesList = useMemo(() => {
-    return baseInquiriesList.filter((i) => !isNotInterestedInquiry(i));
+    return baseInquiriesList.filter((i) => !isNotInterestedInquiry(i) && !isClosedInquiry(i));
   }, [baseInquiriesList]);
 
   const notInterestedInquiriesList = useMemo(() => {
-    return baseInquiriesList.filter((i) => isNotInterestedInquiry(i));
+    return baseInquiriesList.filter((i) => isNotInterestedInquiry(i) && !isClosedInquiry(i));
+  }, [baseInquiriesList]);
+
+  const closedInquiriesList = useMemo(() => {
+    return baseInquiriesList.filter((i) => isClosedInquiry(i));
   }, [baseInquiriesList]);
 
   const totalInquiriesCount = baseInquiriesList.length;
   const interestedCount = interestedInquiriesList.length;
   const notInterestedCount = notInterestedInquiriesList.length;
+  const closedCount = closedInquiriesList.length;
 
   // Filtered inquiries calculation
   const filtered = useMemo(() => {
     let sourceList = baseInquiriesList;
     if (interestTab === "interested") sourceList = interestedInquiriesList;
     else if (interestTab === "not_interested") sourceList = notInterestedInquiriesList;
+    else if (interestTab === "closed") sourceList = closedInquiriesList;
 
     return sourceList.filter((inq) => {
       const q = filters.search.trim().toLowerCase();
@@ -143,7 +167,7 @@ export const InquiriesView: React.FC = () => {
 
       return matchesSearch && matchesStage && matchesSource && matchesDate;
     });
-  }, [baseInquiriesList, interestedInquiriesList, notInterestedInquiriesList, interestTab, filters]);
+  }, [baseInquiriesList, interestedInquiriesList, notInterestedInquiriesList, closedInquiriesList, interestTab, filters]);
 
   const getCompany = (compId: string) => companies.find((c) => c.id === compId);
 
@@ -423,6 +447,17 @@ export const InquiriesView: React.FC = () => {
         >
           <span>🔴 العملاء غير المهتمين ({notInterestedCount})</span>
         </button>
+
+        <button
+          onClick={() => setInterestTab("closed")}
+          className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap flex items-center gap-2 ${
+            interestTab === "closed"
+              ? "bg-[#6B7280] text-white shadow-xs"
+              : "bg-[#F8F8F5] text-[#6B7280] hover:text-stone-800 border border-[#EAEAEA]"
+          }`}
+        >
+          <span>🤝🔒 الصفقات المغلقة ({closedCount})</span>
+        </button>
       </div>
 
       {/* Smart Filters Bar */}
@@ -474,6 +509,19 @@ export const InquiriesView: React.FC = () => {
           const comp = getCompany(inq.companyId);
           const isSelected = selectedIds.includes(inq.id);
           const isNotInterested = isNotInterestedInquiry(inq);
+          const isClosed = isClosedInquiry(inq);
+          const isWon = inq.stage === "won" || inq.stage === "contracted";
+          const isLost = inq.stage === "lost" || inq.interestLevel === "lost" || inq.status === "lost";
+
+          // Find related opportunity
+          const relatedOpp = opportunities.find(
+            (o) => o.inquiryId === inq.id || (o.customerId === inq.customerId && o.status === (isWon ? "won" : isLost ? "lost" : "open"))
+          ) || opportunities.find((o) => o.customerId === inq.customerId);
+
+          // Find related contract
+          const relatedContract = contracts.find(
+            (c) => c.opportunityId === relatedOpp?.id || c.customerId === inq.customerId
+          );
 
           return (
             <div
@@ -481,6 +529,10 @@ export const InquiriesView: React.FC = () => {
               className={`bg-white rounded-2xl border p-4 sm:p-5 shadow-2xs hover:shadow-xs transition-all space-y-3 ${
                 isSelected
                   ? "border-[#C8A75A] ring-1 ring-[#C8A75A] bg-amber-50/20"
+                  : isClosed
+                  ? isWon
+                    ? "border-emerald-200 bg-emerald-50/5"
+                    : "border-rose-200 bg-rose-50/5"
                   : isNotInterested
                   ? "border-stone-300 bg-stone-50/40"
                   : "border-[#EAEAEA]"
@@ -507,7 +559,19 @@ export const InquiriesView: React.FC = () => {
                   </span>
 
                   {/* Section Badge */}
-                  {isNotInterested ? (
+                  {isClosed ? (
+                    isWon ? (
+                      <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                        <span>تم التعاقد والنجاح ✓ (Won)</span>
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200 flex items-center gap-1">
+                        <UserX className="w-3 h-3 text-rose-600" />
+                        <span>صفقة خاسرة ❌ (Lost)</span>
+                      </span>
+                    )
+                  ) : isNotInterested ? (
                     <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200 flex items-center gap-1">
                       <UserX className="w-3 h-3 text-rose-600" />
                       <span>غير مهتم (سجل محفوظ)</span>
@@ -563,6 +627,79 @@ export const InquiriesView: React.FC = () => {
                 <p className="text-xs text-[#6B7280] leading-relaxed">{inq.details}</p>
               </div>
 
+              {isClosed && (
+                <div className={`p-3.5 rounded-xl border text-xs space-y-2.5 ${isWon ? "bg-emerald-50/70 border-emerald-200 text-emerald-950" : "bg-rose-50/70 border-rose-200 text-rose-950"}`}>
+                  <div className="flex items-center justify-between font-bold">
+                    <span className="flex items-center gap-1.5">
+                      {isWon ? (
+                        <>
+                          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                          <span>تم التعاقد والنجاح بنجاح 🤝 (Won)</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse" />
+                          <span>صفقة خاسرة / غير مهتم ❌ (Lost)</span>
+                        </>
+                      )}
+                    </span>
+                    {isWon && (relatedContract?.totalAmount !== undefined || relatedOpp?.expectedValue !== undefined) && (
+                      <span className="px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800 font-extrabold text-xs">
+                        قيمة الصفقة: {((relatedContract?.totalAmount || relatedOpp?.expectedValue || 0)).toLocaleString()} ج.م
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Related entities and metadata */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-stone-600">
+                    {relatedOpp && (
+                      <div className="flex items-center gap-1">
+                        <span className="font-bold text-stone-850">الفرصة البيعية:</span>
+                        <span>{relatedOpp.title} ({relatedOpp.stage})</span>
+                      </div>
+                    )}
+                    {isLost && (relatedOpp?.lossReason || inq.notes) && (
+                      <div className="col-span-1 sm:col-span-2 bg-white/60 p-2 rounded-lg border border-rose-100/60 mt-1">
+                        <div className="font-bold text-rose-900 flex items-center gap-1">
+                          <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+                          <span>سبب الخسارة: {relatedOpp?.lossReason || "غير محدد"}</span>
+                        </div>
+                        {relatedOpp?.lossNotes && (
+                          <p className="text-stone-500 mt-0.5">{relatedOpp.lossNotes}</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Related Records Navigation Links */}
+                  <div className="flex items-center gap-2 flex-wrap pt-1.5 border-t border-dashed border-stone-200">
+                    <span className="text-[10px] text-stone-500 font-bold">الانتقال السريع للسجلات:</span>
+                    <button
+                      onClick={() => setSelectedCustomerIdFor360(inq.customerId)}
+                      className="px-2 py-0.5 rounded-md bg-white border border-stone-200 hover:border-[#C8A75A] text-stone-700 hover:text-[#111111] transition-colors cursor-pointer text-[10px] font-bold"
+                    >
+                      👤 ملف العميل 360
+                    </button>
+                    {relatedOpp && (
+                      <button
+                        onClick={() => navigateToTabWithFilter("opportunities", { searchQuery: inq.customerName, companyId: inq.companyId })}
+                        className="px-2 py-0.5 rounded-md bg-white border border-stone-200 hover:border-amber-600 text-stone-700 hover:text-amber-800 transition-colors cursor-pointer text-[10px] font-bold"
+                      >
+                        📈 الفرصة البيعية ({relatedOpp.title})
+                      </button>
+                    )}
+                    {relatedContract && (
+                      <button
+                        onClick={() => navigateToTabWithFilter("contracts", { searchQuery: inq.customerName, companyId: inq.companyId })}
+                        className="px-2 py-0.5 rounded-md bg-white border border-stone-200 hover:border-emerald-600 text-stone-700 hover:text-emerald-800 transition-colors cursor-pointer text-[10px] font-bold"
+                      >
+                        🤝 العقد ({relatedContract.contractNumber})
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Action Toolbar */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-[#F0F0EE]">
                 <div className="flex items-center gap-2">
@@ -587,7 +724,7 @@ export const InquiriesView: React.FC = () => {
                   </span>
                 </div>
 
-                {/* Conversion Actions based on Interest Classification */}
+                {/* Conversion Actions based on Current State & RBAC */}
                 <div className="flex items-center gap-1.5 flex-wrap">
                   {!isNotInterested ? (
                     <>
@@ -599,25 +736,81 @@ export const InquiriesView: React.FC = () => {
                         <span>+ متابعة</span>
                       </button>
 
-                      <button
-                        onClick={() => handleQuickCreateOpportunity(inq)}
-                        className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-emerald-600 text-white hover:bg-emerald-700 flex items-center gap-1 cursor-pointer transition-colors"
-                      >
-                        <TrendingUp className="w-3 h-3" />
-                        <span>+ فرصة بيعية</span>
-                      </button>
+                      {(() => {
+                        const existingOpp = opportunities.find(
+                          (o) => o.inquiryId === inq.id || (o.customerId === inq.customerId && o.status === "open")
+                        );
+                        const isContractedOrWon = inq.stage === "contracted" || inq.stage === "won" || contracts.some((c) => c.customerId === inq.customerId);
 
-                      <button
-                        onClick={() => {
-                          navigateToTabWithFilter("quotations", {
-                            companyId: inq.companyId,
-                          });
-                        }}
-                        className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-amber-600 text-white hover:bg-amber-700 flex items-center gap-1 cursor-pointer transition-colors"
-                      >
-                        <FileText className="w-3 h-3" />
-                        <span>+ عرض سعر</span>
-                      </button>
+                        if (isContractedOrWon) {
+                          return (
+                            <span className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-800/50 flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                              <span>تم التعاقد ✓</span>
+                            </span>
+                          );
+                        }
+
+                        if (existingOpp) {
+                          return (
+                            <button
+                              onClick={() => {
+                                navigateToTabWithFilter("opportunities", {
+                                  companyId: inq.companyId,
+                                });
+                              }}
+                              className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-amber-950/70 text-amber-300 border border-amber-800/50 hover:bg-amber-900/60 flex items-center gap-1 cursor-pointer transition-colors"
+                              title={`تم فتح الفرصة البيعية مسبقاً: ${existingOpp.title}`}
+                            >
+                              <TrendingUp className="w-3 h-3 text-amber-400" />
+                              <span>الفرصة قائمة ({existingOpp.stage})</span>
+                            </button>
+                          );
+                        }
+
+                        return (
+                          <button
+                            onClick={() => handleQuickCreateOpportunity(inq)}
+                            className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-emerald-600 text-white hover:bg-emerald-700 flex items-center gap-1 cursor-pointer transition-colors"
+                          >
+                            <TrendingUp className="w-3 h-3" />
+                            <span>+ فرصة بيعية</span>
+                          </button>
+                        );
+                      })()}
+
+                      {(() => {
+                        const existingQuote = quotations.find((q) => q.customerId === inq.customerId);
+                        if (existingQuote) {
+                          return (
+                            <button
+                              onClick={() => {
+                                navigateToTabWithFilter("quotations", {
+                                  companyId: inq.companyId,
+                                });
+                              }}
+                              className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-blue-950/70 text-blue-300 border border-blue-800/50 hover:bg-blue-900/60 flex items-center gap-1 cursor-pointer transition-colors"
+                              title={`عرض السعر مسجل: ${existingQuote.quoteNumber}`}
+                            >
+                              <FileText className="w-3 h-3 text-blue-400" />
+                              <span>عرض السعر ({existingQuote.status})</span>
+                            </button>
+                          );
+                        }
+                        return (
+                          <button
+                            onClick={() => {
+                              navigateToTabWithFilter("quotations", {
+                                companyId: inq.companyId,
+                              });
+                            }}
+                            className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-amber-600 text-white hover:bg-amber-700 flex items-center gap-1 cursor-pointer transition-colors"
+                          >
+                            <FileText className="w-3 h-3" />
+                            <span>+ عرض سعر</span>
+                          </button>
+                        );
+                      })()}
                     </>
                   ) : (
                     <button
@@ -637,13 +830,15 @@ export const InquiriesView: React.FC = () => {
                     <span>ملف العميل</span>
                   </button>
 
-                  <button
-                    onClick={() => setSingleDeleteId(inq.id)}
-                    title="حذف الاستفسار"
-                    className="p-1 text-[#9CA3AF] hover:text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer transition-colors"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                  {canDeleteRecords && (
+                    <button
+                      onClick={() => setSingleDeleteId(inq.id)}
+                      title="حذف الاستفسار"
+                      className="p-1 text-[#9CA3AF] hover:text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer transition-colors"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
