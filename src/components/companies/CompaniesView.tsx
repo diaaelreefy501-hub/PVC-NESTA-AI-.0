@@ -2,6 +2,7 @@ import React, { useState, useMemo, useRef } from "react";
 import { useApp } from "../../context/AppContext";
 import { Company, CompanyRole, AppUser, Employee } from "../../types";
 import { CompanyLogo } from "../common/CompanyLogo";
+import { supabase } from "../../integrations/supabase/client";
 import {
   Building2,
   Plus,
@@ -193,25 +194,62 @@ export const CompaniesView: React.FC = () => {
   const addFileInputRef = useRef<HTMLInputElement>(null);
   const editFileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileUpload = (
+  const handleFileUpload = async (
     e: React.ChangeEvent<HTMLInputElement>,
     setter: (url: string) => void
   ) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    // 1. File type validation
     if (!file.type.startsWith("image/")) {
       showToast("يرجى اختيار ملف صورة صالح (PNG, JPG, SVG, WebP)", "warning");
       return;
     }
 
+    // 2. File size validation (max 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      showToast("حجم الملف كبير جداً. الحد الأقصى هو 5 ميجابايت", "warning");
+      return;
+    }
+
+    // Attempt Supabase Storage Upload
+    try {
+      const targetCompId = editingComp?.id || `comp_${Date.now()}`;
+      const fileExt = file.name.split(".").pop() || "png";
+      const filePath = `logos/${targetCompId}_${Date.now()}.${fileExt}`;
+
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from("company-logos")
+        .upload(filePath, file, { upsert: true });
+
+      if (!uploadError && uploadData) {
+        const { data: publicUrlData } = supabase.storage
+          .from("company-logos")
+          .getPublicUrl(filePath);
+        if (publicUrlData?.publicUrl) {
+          setter(publicUrlData.publicUrl);
+          showToast("تم رفع وتحديث شعار الشركة في Supabase Storage بنجاح", "success");
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn("Supabase storage bucket read fallback:", err);
+    }
+
+    // Fallback: Read & optimize as canvas data URL (100% persistent in Supabase DB)
     const reader = new FileReader();
+    reader.onerror = () => {
+      showToast("حدث خطأ أثناء قراءة الصورة المختارة", "error");
+    };
     reader.onload = (event) => {
       const rawDataUrl = event.target?.result as string;
       if (!rawDataUrl) return;
 
-      // Optimize & resize image using canvas to ensure reliable persistence
       const img = new Image();
+      img.onerror = () => {
+        showToast("تنسيق الصورة غير صالح أو محتوى تالف", "error");
+      };
       img.onload = () => {
         const maxDim = 320;
         let width = img.width;
@@ -237,12 +275,10 @@ export const CompaniesView: React.FC = () => {
           ctx.drawImage(img, 0, 0, width, height);
           const optimizedDataUrl = canvas.toDataURL("image/png", 0.9);
           setter(optimizedDataUrl);
+          showToast("تمت معالجة وتثبيت الشعار بنجاح", "success");
         } else {
           setter(rawDataUrl);
         }
-      };
-      img.onerror = () => {
-        setter(rawDataUrl);
       };
       img.src = rawDataUrl;
     };
@@ -297,14 +333,9 @@ export const CompaniesView: React.FC = () => {
     comp: Company,
     tab: "identity" | "targets" | "users" | "preview" = "identity"
   ) => {
-    const cachedLogo =
-      typeof window !== "undefined"
-        ? localStorage.getItem(`pvc_nesta_v1_comp_logo_${comp.id}`) ||
-          localStorage.getItem(`pvc_nesta_v4_comp_logo_${comp.id}`)
-        : null;
     setEditingComp({
       ...comp,
-      logoUrl: comp.logoUrl || cachedLogo || undefined,
+      logoUrl: comp.logoUrl || undefined,
     });
     setActiveTabInModal(tab);
   };
@@ -312,18 +343,6 @@ export const CompaniesView: React.FC = () => {
   const handleUpdate = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingComp) return;
-    const finalLogo =
-      editingComp.logoUrl ||
-      (typeof window !== "undefined"
-        ? localStorage.getItem(`pvc_nesta_v1_comp_logo_${editingComp.id}`) ||
-          localStorage.getItem(`pvc_nesta_v4_comp_logo_${editingComp.id}`)
-        : null) ||
-      undefined;
-
-    if (finalLogo) {
-      localStorage.setItem(`pvc_nesta_v1_comp_logo_${editingComp.id}`, finalLogo);
-      localStorage.setItem(`pvc_nesta_v4_comp_logo_${editingComp.id}`, finalLogo);
-    }
 
     updateCompany(editingComp.id, {
       name: editingComp.name,
@@ -334,7 +353,7 @@ export const CompaniesView: React.FC = () => {
       annualTarget: editingComp.annualTarget || editingComp.monthlyTarget * 12,
       color: editingComp.color,
       secondaryColor: editingComp.secondaryColor || "#111111",
-      logoUrl: finalLogo,
+      logoUrl: editingComp.logoUrl || undefined,
       active: editingComp.active,
       servicePlan: editingComp.servicePlan,
       monthlyServicePrice: editingComp.monthlyServicePrice !== undefined ? Number(editingComp.monthlyServicePrice) : undefined,
@@ -344,7 +363,7 @@ export const CompaniesView: React.FC = () => {
       serviceNotes: editingComp.serviceNotes,
       address: editingComp.address,
     });
-    showToast("تم تحديث بيانات الشركة بنجاح", "success");
+    showToast("تم تحديث بيانات الشركة وشعارها بنجاح", "success");
     setEditingComp(null);
   };
 
@@ -845,13 +864,10 @@ export const CompaniesView: React.FC = () => {
                             <button
                               type="button"
                               onClick={() => {
-                                if (typeof window !== "undefined") {
-                                  localStorage.removeItem(`pvc_nesta_v1_comp_logo_${editingComp.id}`);
-                                  localStorage.removeItem(`pvc_nesta_v4_comp_logo_${editingComp.id}`);
-                                }
                                 setEditingComp({ ...editingComp, logoUrl: undefined });
+                                showToast("تم إزالة الشعار (احفظ التغييرات للتأكيد)", "info");
                               }}
-                              className="text-rose-600 hover:underline text-[11px]"
+                              className="text-rose-600 hover:underline text-[11px] font-bold"
                             >
                               إزالة الشعار
                             </button>
@@ -864,10 +880,6 @@ export const CompaniesView: React.FC = () => {
                           className="hidden"
                           onChange={(e) =>
                             handleFileUpload(e, (url) => {
-                              if (typeof window !== "undefined") {
-                                localStorage.setItem(`pvc_nesta_v1_comp_logo_${editingComp.id}`, url);
-                                localStorage.setItem(`pvc_nesta_v4_comp_logo_${editingComp.id}`, url);
-                              }
                               setEditingComp((prev) => (prev ? { ...prev, logoUrl: url } : null));
                             })
                           }

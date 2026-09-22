@@ -1101,11 +1101,11 @@ app.patch("/api/admin/users/:id/status", authenticateAdmin, async (req, res) => 
   }
 });
 
-// 3. Update role and company membership
+// 3. Update role, company membership, and permissions
 app.patch("/api/admin/users/:id/role", authenticateAdmin, async (req, res) => {
   const caller = (req as any).caller;
   const targetId = req.params.id;
-  const { role, allowedCompanyIds } = req.body;
+  const { role, allowedCompanyIds, permissions } = req.body;
   const clientToUse = supabaseAdmin || supabaseAnon;
 
   if (caller.role !== "owner" && role === "admin") {
@@ -1116,6 +1116,7 @@ app.patch("/api/admin/users/:id/role", authenticateAdmin, async (req, res) => {
     const updateData: any = {};
     if (role) updateData.role = role;
     if (allowedCompanyIds) updateData.allowedCompanyIds = allowedCompanyIds;
+    if (permissions !== undefined) updateData.permissions = permissions;
 
     const { error: updateError } = await clientToUse
       .from("users")
@@ -1124,6 +1125,30 @@ app.patch("/api/admin/users/:id/role", authenticateAdmin, async (req, res) => {
 
     if (updateError) throw updateError;
     return res.json({ success: true, updated: updateData });
+  } catch (err: any) {
+    return res.status(500).json({ error: "فشل تحديث الصلاحيات: " + err.message });
+  }
+});
+
+// Update user specific permissions (e.g. data_review_approval)
+app.patch("/api/admin/users/:id/permissions", authenticateAdmin, async (req, res) => {
+  const caller = (req as any).caller;
+  const targetId = req.params.id;
+  const { permissions } = req.body;
+  const clientToUse = supabaseAdmin || supabaseAnon;
+
+  if (caller.role !== "owner") {
+    return res.status(403).json({ error: "فقط مالك النظام يمكنه منح أو تعديل الصلاحيات المباشرة للمستخدمين" });
+  }
+
+  try {
+    const { error: updateError } = await clientToUse
+      .from("users")
+      .update({ permissions })
+      .eq("id", targetId);
+
+    if (updateError) throw updateError;
+    return res.json({ success: true, permissions });
   } catch (err: any) {
     return res.status(500).json({ error: "فشل تحديث الصلاحيات: " + err.message });
   }

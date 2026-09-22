@@ -180,6 +180,7 @@ export interface FollowUp {
   customerId: string;
   customerName: string;
   customerPhone: string;
+  opportunityId?: string;
   dueDate: string; // YYYY-MM-DD
   time?: string;
   dueTime?: string;
@@ -203,6 +204,7 @@ export interface AppUser {
   role: UserRole;
   companyRoles?: Record<string, CompanyRole>; // companyId -> role in that company
   allowedCompanyIds: string[]; // ['all'] or explicit company IDs like ['comp-newhouse']
+  permissions?: Partial<Record<string, boolean>>; // e.g. { data_review_approval: true }
   active: boolean;
   phone?: string;
 }
@@ -446,6 +448,7 @@ export type PermissionName =
   | "manage_company_settings"
   | "delete_records"
   | "approve_records"
+  | "data_review_approval"
   | "manage_finance"
   | "manage_settings";
 

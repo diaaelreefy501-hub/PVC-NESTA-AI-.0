@@ -12,6 +12,7 @@ import {
 import { OPPORTUNITY_STAGES_CONFIG } from "../../utils/salesOperations";
 import { CloseDealModal } from "./CloseDealModal";
 import { EditOpportunityModal } from "./EditOpportunityModal";
+import { CompanyIdentity } from "../common/CompanyIdentity";
 import {
   User,
   Users,
@@ -40,6 +41,12 @@ import {
   Tag,
   Share2,
   Clock,
+  LayoutGrid,
+  Table as TableIcon,
+  MessageSquare,
+  CalendarDays,
+  ExternalLink,
+  Link2,
 } from "lucide-react";
 
 const CreateCustomerFromOppModal: React.FC<{
@@ -507,7 +514,18 @@ export const OpportunitiesView: React.FC = () => {
     contracts,
     calculateContractedSalesTotal,
     addCustomer,
+    interactions,
+    followUps,
+    quotations,
+    navigateToTabWithFilter,
   } = useApp();
+
+  // Dual View Mode Pattern (Cards | Table)
+  const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
+
+  // Quote Sent Prompt Modal state
+  const [quoteSentPromptOpp, setQuoteSentPromptOpp] = useState<Opportunity | null>(null);
+  const [showQuoteSentPrompt, setShowQuoteSentPrompt] = useState(false);
 
   // Selection state for "تحديد الكل"
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -723,9 +741,12 @@ export const OpportunitiesView: React.FC = () => {
             <Target className="w-6 h-6" />
           </span>
           <div>
-            <h1 className="text-xl sm:text-2xl font-black text-[#EDEDED]">
-              مركز الفرص البيعية (Qualified Opportunities)
-            </h1>
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <h1 className="text-xl sm:text-2xl font-black text-[#EDEDED]">
+                مركز الفرص البيعية (Qualified Opportunities)
+              </h1>
+              <CompanyIdentity size="xs" />
+            </div>
             <p className="text-xs sm:text-sm text-[#A1A1AA]">
               تتبع وإدارة الفرص البيعية وإغلاق الصفقات بالتعاقد (Won) أو الخسارة (Lost) مع حفظ أسباب الخسارة
             </p>
@@ -876,17 +897,33 @@ export const OpportunitiesView: React.FC = () => {
             </select>
           </div>
 
-          {/* Customer Link Status Filter */}
-          <div className="sm:col-span-2">
-            <select
-              value={customerLinkFilter}
-              onChange={(e) => setCustomerLinkFilter(e.target.value)}
-              className="w-full p-2.5 bg-[#202225] border border-[#292B2E] text-[#EDEDED] rounded-xl text-xs font-bold focus:border-[#C8A75A] outline-hidden cursor-pointer"
-            >
-              <option value="all">الكل (مرتبط وبدون عميل)</option>
-              <option value="linked">مرتبط بعميل</option>
-              <option value="unlinked">بدون عميل مرتبط</option>
-            </select>
+          {/* View Switcher Toggle (Cards | Table) */}
+          <div className="sm:col-span-12 flex items-center justify-between pt-2 border-t border-[#292B2E]">
+            <div className="text-xs text-[#A1A1AA] font-bold">
+              عرض البيانات ({displayedOpportunities.length} فرصة)
+            </div>
+            <div className="flex items-center bg-[#202225] border border-[#292B2E] rounded-xl p-1">
+              <button
+                type="button"
+                onClick={() => setViewMode("cards")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  viewMode === "cards" ? "bg-[#C8A75A] text-[#111111]" : "text-[#A1A1AA] hover:bg-[#202225]"
+                }`}
+              >
+                <LayoutGrid className="w-3.5 h-3.5" />
+                <span>بطاقات (Cards)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode("table")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  viewMode === "table" ? "bg-[#C8A75A] text-[#111111]" : "text-[#A1A1AA] hover:bg-[#202225]"
+                }`}
+              >
+                <TableIcon className="w-3.5 h-3.5" />
+                <span>جدول (Table)</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -995,7 +1032,7 @@ export const OpportunitiesView: React.FC = () => {
             يمكنك إنشاء فرصة بيعية جديدة بالنقر على زر &quot;فرصة بيعية جديدة&quot; أعلاه، وتحديد العميل أو النطاق العام.
           </p>
         </div>
-      ) : (
+      ) : viewMode === "cards" ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {displayedOpportunities.map((opp) => {
             const comp = companies.find((c) => c.id === opp.companyId);
@@ -1223,6 +1260,11 @@ export const OpportunitiesView: React.FC = () => {
                         onClick={(e) => e.stopPropagation()}
                         onChange={(e) => {
                           const newStage = e.target.value as OpportunityStage;
+                          if (newStage === "quote_sent" && !opp.quotationId && !opp.hasQuote) {
+                            setQuoteSentPromptOpp(opp);
+                            setShowQuoteSentPrompt(true);
+                            return;
+                          }
                           const cfg = OPPORTUNITY_STAGES_CONFIG.find((s) => s.id === newStage);
                           updateOpportunity(opp.id, {
                             stage: newStage,
@@ -1319,6 +1361,138 @@ export const OpportunitiesView: React.FC = () => {
               </div>
             );
           })}
+        </div>
+      ) : (
+        <div className="bg-[#18191B] rounded-2xl border border-[#292B2E] overflow-x-auto shadow-sm">
+          <table className="w-full text-right text-xs">
+            <thead>
+              <tr className="bg-[#111111] text-[#A1A1AA] border-b border-[#292B2E]">
+                <th className="p-3 text-center">تحديد</th>
+                <th className="p-3">اسم الفرصة والعميل</th>
+                <th className="p-3">الشركة</th>
+                <th className="p-3">المرحلة البيعية</th>
+                <th className="p-3">القيمة المتوقعة</th>
+                <th className="p-3">الإجراء التالي</th>
+                <th className="p-3">الحالة</th>
+                <th className="p-3 text-center">الإجراءات</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#292B2E] text-[#EDEDED]">
+              {displayedOpportunities.map((opp) => {
+                const comp = companies.find((c) => c.id === opp.companyId);
+                const isSelected = selectedIds.includes(opp.id);
+                const cfg = OPPORTUNITY_STAGES_CONFIG.find((s) => s.id === opp.stage);
+                return (
+                  <tr key={opp.id} className="hover:bg-[#202225]/60 transition-colors">
+                    <td className="p-3 text-center">
+                      <button
+                        type="button"
+                        onClick={() => toggleSelectOne(opp.id)}
+                        className="text-[#A1A1AA] hover:text-[#C8A75A] cursor-pointer"
+                      >
+                        {isSelected ? <CheckSquare className="w-4 h-4 text-[#C8A75A]" /> : <Square className="w-4 h-4" />}
+                      </button>
+                    </td>
+                    <td className="p-3">
+                      <div
+                        onClick={() => setSelectedOppForActions(opp)}
+                        className="font-bold text-[#EDEDED] hover:text-[#C8A75A] cursor-pointer underline underline-offset-2"
+                      >
+                        {opp.title}
+                      </div>
+                      <div className="text-[11px] text-[#A1A1AA] flex items-center gap-2 mt-0.5">
+                        <span>{opp.customerName || "بدون عميل"}</span>
+                        {opp.customerPhone && <span dir="ltr" className="font-mono">({opp.customerPhone})</span>}
+                      </div>
+                    </td>
+                    <td className="p-3">
+                      {comp ? (
+                        <CompanyIdentity companyId={comp.id} companyName={comp.name} logoUrl={comp.logoUrl} size="sm" />
+                      ) : (
+                        <span className="text-[#A1A1AA]">غير محدد</span>
+                      )}
+                    </td>
+                    <td className="p-3">
+                      {opp.status === "open" ? (
+                        <select
+                          value={opp.stage}
+                          onChange={(e) => {
+                            const newStage = e.target.value as OpportunityStage;
+                            if (newStage === "quote_sent" && !opp.quotationId && !opp.hasQuote) {
+                              setQuoteSentPromptOpp(opp);
+                              setShowQuoteSentPrompt(true);
+                              return;
+                            }
+                            const c = OPPORTUNITY_STAGES_CONFIG.find((s) => s.id === newStage);
+                            updateOpportunity(opp.id, {
+                              stage: newStage,
+                              nextAction: c?.defaultAction || opp.nextAction,
+                            });
+                            showToast(`تم تحديث المرحلة إلى ${c?.label || newStage}`, "success");
+                          }}
+                          className="bg-[#202225] border border-[#292B2E] text-[#C8A75A] font-bold text-[11px] rounded-lg px-2 py-1 outline-hidden cursor-pointer"
+                        >
+                          {OPPORTUNITY_STAGES_CONFIG.map((c) => (
+                            <option key={c.id} value={c.id}>{c.label}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="font-bold text-[#C8A75A]">{cfg?.label || opp.stage}</span>
+                      )}
+                    </td>
+                    <td className="p-3 font-mono font-bold text-emerald-400">
+                      {(opp.expectedValue || 0).toLocaleString()} ج.م
+                    </td>
+                    <td className="p-3 text-[11px]">
+                      <div>{opp.nextAction || "لا يوجد"}</div>
+                      {opp.nextFollowUpDate && (
+                        <div className="text-[#A1A1AA] font-mono mt-0.5 flex items-center gap-1">
+                          <Calendar className="w-3 h-3 text-[#C8A75A]" />
+                          <span>{opp.nextFollowUpDate}</span>
+                        </div>
+                      )}
+                    </td>
+                    <td className="p-3">
+                      <span className={`px-2 py-0.5 rounded-lg text-[10px] font-bold ${
+                        opp.status === "won" ? "bg-emerald-950/60 text-emerald-400 border border-emerald-800/40" :
+                        opp.status === "lost" ? "bg-rose-950/60 text-rose-400 border border-rose-800/40" :
+                        "bg-amber-950/50 text-[#C8A75A] border border-amber-800/40"
+                      }`}>
+                        {opp.status === "won" ? "Won ✓" : opp.status === "lost" ? "Lost ✗" : "مفتوحة ⏳"}
+                      </span>
+                    </td>
+                    <td className="p-3 text-center">
+                      <div className="flex items-center justify-center gap-1.5">
+                        <button
+                          onClick={() => setSelectedOppForActions(opp)}
+                          className="p-1.5 bg-[#202225] hover:bg-[#292B2E] text-[#C8A75A] rounded-lg transition-colors cursor-pointer"
+                          title="تفاصيل وإجراءات"
+                        >
+                          <Target className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => setEditingOpp(opp)}
+                          className="p-1.5 bg-[#202225] hover:bg-[#292B2E] text-[#EDEDED] rounded-lg transition-colors cursor-pointer"
+                          title="تعديل"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        {canDeleteRecords && (
+                          <button
+                            onClick={() => setDeletingOpp(opp)}
+                            className="p-1.5 bg-[#202225] hover:bg-rose-950/50 text-rose-400 rounded-lg transition-colors cursor-pointer"
+                            title="حذف"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -1892,6 +2066,68 @@ export const OpportunitiesView: React.FC = () => {
                   )}
                 </div>
 
+                {/* Opportunity Timeline & Document History */}
+                <div className="space-y-3 pt-2 border-t border-[#292B2E]">
+                  <h4 className="font-bold text-[#C8A75A] flex items-center gap-1.5">
+                    <Clock className="w-4 h-4 text-[#C8A75A]" />
+                    <span>سجل الأحداث والوثائق المرتبطة بالفرصة (Opportunity Timeline)</span>
+                  </h4>
+                  <div className="space-y-2 bg-[#111111] p-3 rounded-2xl border border-[#292B2E] max-h-48 overflow-y-auto">
+                    {(() => {
+                      const oppInteractions = interactions.filter(
+                        (i) => i.relatedEntityId === selectedOppForActions.id || (selectedOppForActions.customerId && i.customerId === selectedOppForActions.customerId)
+                      );
+                      const oppFollowUps = followUps.filter(
+                        (f) => f.opportunityId === selectedOppForActions.id || (selectedOppForActions.customerId && f.customerId === selectedOppForActions.customerId)
+                      );
+                      const oppQuotations = quotations.filter(
+                        (q) => q.opportunityId === selectedOppForActions.id || (selectedOppForActions.quotationId && q.id === selectedOppForActions.quotationId)
+                      );
+
+                      const items = [
+                        ...oppInteractions.map((i) => ({
+                          id: i.id,
+                          date: i.date || i.createdAt || "غير محدد",
+                          type: "interaction",
+                          title: i.type === "status_change" ? "تغيير مرحلة بيعية" : i.type,
+                          notes: i.notes,
+                        })),
+                        ...oppFollowUps.map((f) => ({
+                          id: f.id,
+                          date: f.dueDate,
+                          type: "followup",
+                          title: `متابعة (${f.status})`,
+                          notes: f.title + " - " + (f.notes || ""),
+                        })),
+                        ...oppQuotations.map((q) => ({
+                          id: q.id,
+                          date: q.createdAt || "غير محدد",
+                          type: "quotation",
+                          title: `عرض سعر #${q.quoteNumber} (${q.status})`,
+                          notes: `القيمة: ${q.totalAmount.toLocaleString()} ج.م`,
+                        })),
+                      ];
+
+                      if (items.length === 0) {
+                        return <div className="text-center text-[#A1A1AA] py-3 text-xs">لا توجد أحداث مسجلة بعد على هذه الفرصة.</div>;
+                      }
+
+                      return items.map((it) => (
+                        <div key={it.id} className="p-2 bg-[#18191B] rounded-xl border border-[#292B2E] flex items-start justify-between text-xs">
+                          <div>
+                            <div className="font-bold text-[#EDEDED] flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-[#C8A75A]"></span>
+                              <span>{it.title}</span>
+                            </div>
+                            {it.notes && <div className="text-[11px] text-[#A1A1AA] mt-0.5">{it.notes}</div>}
+                          </div>
+                          <span className="text-[10px] text-[#6B7280] font-mono shrink-0">{it.date}</span>
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                </div>
+
                 {/* Extra Actions */}
                 <div className="flex justify-between items-center pt-4 border-t border-[#292B2E]">
                   <div className="flex gap-2">
@@ -1954,6 +2190,74 @@ export const OpportunitiesView: React.FC = () => {
           onClose={() => setDeletingOpp(null)}
           onSuccess={() => setDeletingOpp(null)}
         />
+      )}
+
+      {/* Quote Sent Prompt Modal */}
+      {showQuoteSentPrompt && quoteSentPromptOpp && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-[#18191B] border border-[#292B2E] rounded-3xl max-w-md w-full p-6 space-y-5 text-right text-[#EDEDED] shadow-2xl animate-in fade-in">
+            <div className="flex items-center justify-between border-b border-[#292B2E] pb-3">
+              <h3 className="font-bold text-sm text-[#C8A75A]">تحديث المرحلة إلى "تم إرسال العرض"</h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowQuoteSentPrompt(false);
+                  setQuoteSentPromptOpp(null);
+                }}
+                className="text-[#A1A1AA] hover:text-[#EDEDED] cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-xs text-[#A1A1AA] leading-relaxed">
+              الفرصة البيعية (<strong className="text-[#EDEDED]">{quoteSentPromptOpp.title}</strong>) غير مرتبطة بعرض سعر قائم. يرجى اختيار إجراء:
+            </p>
+            <div className="space-y-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowQuoteSentPrompt(false);
+                  setSelectedOppForActions(quoteSentPromptOpp);
+                  setShowLinkSelector(true);
+                }}
+                className="w-full p-3 bg-[#202225] hover:bg-[#292B2E] border border-[#292B2E] rounded-2xl text-xs font-bold text-emerald-400 flex items-center justify-between transition-colors cursor-pointer"
+              >
+                <span>1. ربط بعرض سعر قائم بالنظام</span>
+                <Link2 className="w-4 h-4 text-emerald-400" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const targetOpp = quoteSentPromptOpp;
+                  setShowQuoteSentPrompt(false);
+                  setQuoteSentPromptOpp(null);
+                  navigateToTabWithFilter("quotations", { searchQuery: targetOpp.customerName || "" });
+                }}
+                className="w-full p-3 bg-[#202225] hover:bg-[#292B2E] border border-[#292B2E] rounded-2xl text-xs font-bold text-[#C8A75A] flex items-center justify-between transition-colors cursor-pointer"
+              >
+                <span>2. الانتقال لإنشاء عرض سعر جديد</span>
+                <Plus className="w-4 h-4 text-[#C8A75A]" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const cfg = OPPORTUNITY_STAGES_CONFIG.find((s) => s.id === "quote_sent");
+                  updateOpportunity(quoteSentPromptOpp.id, {
+                    stage: "quote_sent",
+                    nextAction: cfg?.defaultAction || quoteSentPromptOpp.nextAction,
+                  });
+                  showToast("تم تحديث المرحلة إلى تم إرسال العرض بدون إنشاء عرض سعر", "success");
+                  setShowQuoteSentPrompt(false);
+                  setQuoteSentPromptOpp(null);
+                }}
+                className="w-full p-3 bg-[#202225] hover:bg-[#292B2E] border border-[#292B2E] rounded-2xl text-xs font-bold text-[#EDEDED] flex items-center justify-between transition-colors cursor-pointer"
+              >
+                <span>3. التحديث فقط إلى "تم إرسال العرض"</span>
+                <CheckCircle2 className="w-4 h-4 text-[#A1A1AA]" />
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -92,25 +92,31 @@ export const cleanInquiryUpdate = (updates: any) => {
   return cleaned;
 };
 
-export const cleanFollowUp = (f: any) => ({
-  id: f.id,
-  companyId: f.companyId,
-  customerId: f.customerId || null,
-  customerName: f.customerName || "",
-  customerPhone: f.customerPhone || "",
-  dueDate: f.dueDate,
-  time: f.time || null,
-  title: f.title || "",
-  notes: f.notes || "",
-  status: f.status || "pending",
-  priority: f.priority || "medium",
-  createdAt: f.createdAt || new Date().toISOString().split("T")[0],
-});
+export const cleanFollowUp = (f: any) => {
+  const oppId = f.opportunityId !== undefined ? f.opportunityId : f.opportunity_id;
+  return {
+    id: f.id,
+    companyId: f.companyId,
+    customerId: f.customerId || null,
+    opportunityId: oppId || null,
+    customerName: f.customerName || "",
+    customerPhone: f.customerPhone || "",
+    dueDate: f.dueDate,
+    time: f.time || null,
+    title: f.title || "",
+    notes: f.notes || "",
+    status: f.status || "pending",
+    priority: f.priority || "medium",
+    createdAt: f.createdAt || new Date().toISOString().split("T")[0],
+  };
+};
 
 export const cleanFollowUpUpdate = (updates: any) => {
   const allowed = [
     "companyId",
     "customerId",
+    "opportunityId",
+    "opportunity_id",
     "customerName",
     "customerPhone",
     "dueDate",
@@ -126,6 +132,11 @@ export const cleanFollowUpUpdate = (updates: any) => {
     if (updates[key] !== undefined) {
       cleaned[key] = updates[key];
     }
+  }
+  // Guarantee both mappings are set correctly if one is present
+  const oppId = updates.opportunityId !== undefined ? updates.opportunityId : updates.opportunity_id;
+  if (oppId !== undefined) {
+    cleaned.opportunityId = oppId;
   }
   return cleaned;
 };

@@ -17,6 +17,7 @@ import {
   AlertTriangle,
   X,
   FileSpreadsheet,
+  Target,
 } from "lucide-react";
 import { BulkActionBar, StatusOption } from "../common/BulkActionBar";
 import { SmartFilterBar, FilterState } from "../common/SmartFilterBar";
@@ -36,6 +37,7 @@ export const FollowupsView: React.FC = () => {
     setSelectedCustomerIdFor360,
     navigationFilter,
     showToast,
+    navigateToTabWithFilter,
   } = useApp();
 
   const todayStr = new Date().toISOString().split("T")[0];
@@ -526,6 +528,17 @@ export const FollowupsView: React.FC = () => {
                         <span>تأجيل</span>
                       </button>
                     </>
+                  )}
+
+                  {item.opportunityId && (
+                    <button
+                      onClick={() => navigateToTabWithFilter("opportunities", { searchQuery: item.customerName || "" })}
+                      className="px-2.5 py-1 rounded-lg text-xs font-bold bg-[#18191B] text-[#C8A75A] border border-[#292B2E] hover:border-[#C8A75A] flex items-center gap-1 cursor-pointer"
+                      title="الانتقال إلى الفرصة المرتبطة"
+                    >
+                      <Target className="w-3 h-3 text-[#C8A75A]" />
+                      <span>الفرصة</span>
+                    </button>
                   )}
 
                   <button

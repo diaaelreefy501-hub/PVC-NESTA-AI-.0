@@ -56,7 +56,7 @@ export const DashboardView: React.FC = () => {
     setSelectedMetricForLineage,
     salesOverrideValue,
     salesManualAdjustment,
-    opportunities,
+    filteredOpportunities,
     isPremiumAiEnabled,
   } = useApp();
 
@@ -362,7 +362,7 @@ export const DashboardView: React.FC = () => {
             </div>
           </div>
           <div className="text-2xl font-black text-[#EDEDED] font-mono mt-2">
-            {opportunities.length}
+            {filteredOpportunities.length}
           </div>
           <p className="text-[11px] text-[#A1A1AA] mt-1">اضغط لاستعراض كافة الفرص الحالية</p>
         </div>

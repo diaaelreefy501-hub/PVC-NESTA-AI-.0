@@ -95,6 +95,7 @@ import { GuardianEngine } from "../utils/guardianEngine";
 import { BusinessRulesEngine, SystemDataSnapshot } from "../utils/businessRulesEngine";
 import { DataLineageEngine } from "../utils/dataLineageEngine";
 import { normalizeArea } from "../utils/areaUtils";
+import { OPPORTUNITY_STAGES_CONFIG } from "../utils/salesOperations";
 import { parseExcelDate, parseFinancialAmount } from "../utils/excelDateUtils";
 import { mapStageFromExcel, ColumnMapping } from "../utils/smartImportDetector";
 import {
@@ -1283,6 +1284,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
           email: myProfile.email,
           role: myProfile.role,
           allowedCompanyIds: myProfile.allowedCompanyIds || myProfile.allowed_company_ids || ["all"],
+          permissions: myProfile.permissions || {},
           active: myProfile.active !== false,
         };
       }
@@ -1296,6 +1298,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
         email: u.email,
         role: u.role,
         allowedCompanyIds: u.allowedCompanyIds || u.allowed_company_ids || [],
+        permissions: u.permissions || {},
         active: u.active !== false,
       })) : [];
       
@@ -1779,7 +1782,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
 
   const isCompanySelected = useCallback(
     (compId?: string) => {
-      if (!compId) return true;
+      // Requirement #9: Records without company_id must NOT bleed into a specific company scope
+      if (!compId) {
+        if ((selectedCompanyIds && selectedCompanyIds.length > 0 && !selectedCompanyIds.includes("all")) || activeCompanyId !== "all") {
+          return false;
+        }
+        return true;
+      }
 
       // Strict security check: if currentUser has restricted allowedCompanyIds, prevent access to any other company
       if (currentUser && currentUser.role !== "owner" && !currentUser.allowedCompanyIds.includes("all")) {
@@ -6345,6 +6354,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode; session?: any }>
       },
       silent: true,
     });
+
+    // PHASE 1: Stage Change Event Logging
+    if (updates.stage && updates.stage !== existing.stage) {
+      const getStageLabel = (stg: string) => {
+        const found = OPPORTUNITY_STAGES_CONFIG.find((s) => s.id === stg);
+        return found ? found.label : stg;
+      };
+      const oldLabel = getStageLabel(existing.stage);
+      const newLabel = getStageLabel(updates.stage);
+      addInteraction({
+        customerId: existing.customerId || "",
+        companyId: existing.companyId, // Strictly inherit Opportunity companyId
+        type: "status_change",
+        date: new Date().toLocaleDateString("ar-EG"),
+        notes: `تغيير مرحلة الفرصة (${existing.title}): من "${oldLabel}" إلى "${newLabel}"`,
+        result: `تحديث مرحلة الفرصة`,
+        relatedEntityType: "opportunity",
+        relatedEntityId: existing.id,
+        isSystemGenerated: true,
+      });
+    }
+
+    // PHASE 2 & 3: Unified Follow-up Sync
+    if (updates.nextFollowUpDate && updates.nextFollowUpDate.trim() !== "") {
+      const existingPendingFup = followUps.find(
+        (f) =>
+          (f.opportunityId === existing.id || (existing.customerId && f.customerId === existing.customerId)) &&
+          f.dueDate === updates.nextFollowUpDate &&
+          f.status === "pending"
+      );
+      if (existingPendingFup) {
+        rescheduleFollowUp(existingPendingFup.id, updates.nextFollowUpDate, updates.nextAction || existingPendingFup.notes);
+      } else {
+        addFollowUp({
+          companyId: existing.companyId, // Strictly inherit Opportunity companyId
+          customerId: existing.customerId || "",
+          customerName: existing.customerName || existing.title,
+          customerPhone: existing.customerPhone || "",
+          opportunityId: existing.id,
+          dueDate: updates.nextFollowUpDate,
+          title: `متابعة الفرصة: ${existing.title}`,
+          notes: updates.nextAction || `متابعة مجدولة للفرصة البيعية`,
+          status: "pending",
+          priority: existing.temperature === "hot" ? "urgent" : "medium",
+        });
+      }
+    }
 
     // 1. SYNC LINKED QUOTATION
     if (existing.quotationId) {

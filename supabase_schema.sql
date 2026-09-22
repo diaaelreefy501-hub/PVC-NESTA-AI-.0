@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS public.follow_ups (
   id text PRIMARY KEY,
   companyId text,
   customerId text,
+  "opportunityId" text,
   customerName text,
   customerPhone text,
   dueDate text,
@@ -474,5 +475,11 @@ ON public.products FOR ALL
 TO authenticated
 USING (true)
 WITH CHECK (true);
+
+-- 20. CONSTRAINTS & RELATIONSHIPS (FORWARD REFERENCES)
+ALTER TABLE public.follow_ups 
+  ADD CONSTRAINT fk_follow_ups_opportunity 
+  FOREIGN KEY ("opportunityId") REFERENCES public.opportunities(id) ON DELETE SET NULL;
+
 
 

@@ -450,6 +450,43 @@ export const SettingsView: React.FC = () => {
     }
   };
 
+  const handleToggleDataReviewPermission = async (user: AppUser) => {
+    if (user.role === "owner") {
+      showToast("مالك النظام يملك صلاحية اعتماد البيانات افتراضياً", "info");
+      return;
+    }
+
+    const currentPerm = Boolean(user.permissions?.data_review_approval);
+    const nextPermissions = {
+      ...(user.permissions || {}),
+      data_review_approval: !currentPerm,
+    };
+
+    try {
+      const res = await callAdminApi(`/api/admin/users/${user.id}/permissions`, {
+        method: "PATCH",
+        body: JSON.stringify({ permissions: nextPermissions }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.error || "تعذر تحديث صلاحيات مراجعة البيانات");
+      }
+
+      setUsers((prev) =>
+        prev.map((u) => (u.id === user.id ? { ...u, permissions: nextPermissions } : u))
+      );
+
+      showToast(
+        !currentPerm
+          ? `تم منح صلاحية "مراجعة واعتماد البيانات" للمستخدم ${user.name}`
+          : `تم سحب صلاحية "مراجعة واعتماد البيانات" من المستخدم ${user.name}`,
+        "success"
+      );
+    } catch (err: any) {
+      showToast("فشل التحديث: " + err.message, "error");
+    }
+  };
+
   const handleEditUser = async () => {
     if (!editingUser) return;
     if (!editUserForm.name.trim()) return showToast("الاسم مطلوب", "warning");
@@ -813,6 +850,7 @@ export const SettingsView: React.FC = () => {
                     <th className="pb-2.5 font-semibold">البريد</th>
                     <th className="pb-2.5 font-semibold">الدور</th>
                     <th className="pb-2.5 font-semibold">الشركة المحددة</th>
+                    <th className="pb-2.5 font-semibold">اعتماد البيانات</th>
                     <th className="pb-2.5 font-semibold">حالة الحساب</th>
                     <th className="pb-2.5 font-semibold">هوية Supabase Auth</th>
                     <th className="pb-2.5 font-semibold text-center">الإجراءات</th>
@@ -849,6 +887,25 @@ export const SettingsView: React.FC = () => {
                             ? "كافة الشركات"
                             : companies.find((c) => c.id === u.allowedCompanyIds[0])?.name ||
                               u.allowedCompanyIds[0]}
+                        </td>
+                        <td className="py-3">
+                          {u.role === "owner" ? (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-950/70 text-amber-300 border border-amber-800/40">
+                              افتراضي (مالك)
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => handleToggleDataReviewPermission(u)}
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-colors cursor-pointer ${
+                                u.permissions?.data_review_approval
+                                  ? "bg-emerald-950/80 text-emerald-300 border-emerald-800/60 hover:bg-emerald-900"
+                                  : "bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700"
+                              }`}
+                              title="انقر لمنح أو سحب صلاحية مراجعة واعتماد البيانات"
+                            >
+                              {u.permissions?.data_review_approval ? "✓ مصرح" : "✕ معطل"}
+                            </button>
+                          )}
                         </td>
                         <td className="py-3">
                           <span

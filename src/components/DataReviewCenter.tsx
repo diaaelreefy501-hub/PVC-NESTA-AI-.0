@@ -5,6 +5,8 @@ import { runContractsDiagnostic } from "../utils/contractDiagnostic";
 import { DiagnosticEngine, DiagnosticIssue } from "../utils/diagnosticEngine";
 import { DrillDownModal } from "./DrillDownModal";
 import { classifyCustomer } from "../utils/customerClassifier";
+import { CompanyIdentity } from "./common/CompanyIdentity";
+import { canPerformReviewAction } from "../utils/rbac";
 import { 
   ShieldAlert, 
   CheckCircle2, 
@@ -37,18 +39,22 @@ import {
 
 export const DataReviewCenter: React.FC = () => {
   const {
-    contracts,
-    sales,
-    opportunities,
-    customers,
-    quotations,
-    inquiries,
+    filteredContracts: contracts,
+    filteredSales: sales,
+    filteredOpportunities: opportunities,
+    filteredCustomers: customers,
+    filteredQuotations: quotations,
+    filteredInquiries: inquiries,
     companies,
     tasks,
-    followUps,
-    inspections,
+    filteredFollowUps: followUps,
+    filteredInspections: inspections,
     interactions,
-    payments,
+    filteredPayments: payments,
+    selectedCompanyIds,
+    activeCompanyId,
+    currentUser,
+    currentCompanyRole,
     approveRecord,
     excludeRecord,
     showToast,
@@ -62,6 +68,11 @@ export const DataReviewCenter: React.FC = () => {
     purgeOrphanContracts,
     createCustomersFromOrphanContracts,
   } = useApp();
+
+  // Reset selected batch records whenever company scope changes
+  useEffect(() => {
+    setSelectedRecordIds(new Set());
+  }, [selectedCompanyIds, activeCompanyId]);
 
   // Active Control Panel view tabs
   const [activeTab, setActiveTab] = useState<
@@ -431,6 +442,17 @@ export const DataReviewCenter: React.FC = () => {
     const item = quotations.find(q => q.id === id);
     if (!item) return;
 
+    const auth = canPerformReviewAction(
+      currentUser,
+      item.companyId,
+      selectedCompanyIds && selectedCompanyIds.length > 0 ? selectedCompanyIds : [activeCompanyId],
+      currentCompanyRole
+    );
+    if (!auth.allowed) {
+      showToast(auth.reason || "حظر أمني: غير مصرح بتنفيذ هذا الإجراء", "error");
+      return;
+    }
+
     // 1. Delete record in React App State via AppContext
     deleteQuotation(id);
 
@@ -462,6 +484,17 @@ export const DataReviewCenter: React.FC = () => {
     const item = quotations.find(q => q.id === id);
     if (!item) return;
 
+    const auth = canPerformReviewAction(
+      currentUser,
+      item.companyId,
+      selectedCompanyIds && selectedCompanyIds.length > 0 ? selectedCompanyIds : [activeCompanyId],
+      currentCompanyRole
+    );
+    if (!auth.allowed) {
+      showToast(auth.reason || "حظر أمني: غير مصرح بتنفيذ هذا الإجراء", "error");
+      return;
+    }
+
     // 1. Mark as excluded
     excludeRecord('quotation', id, reason);
 
@@ -491,6 +524,17 @@ export const DataReviewCenter: React.FC = () => {
     const item = quotations.find(q => q.id === id);
     if (!item) return;
 
+    const auth = canPerformReviewAction(
+      currentUser,
+      item.companyId,
+      selectedCompanyIds && selectedCompanyIds.length > 0 ? selectedCompanyIds : [activeCompanyId],
+      currentCompanyRole
+    );
+    if (!auth.allowed) {
+      showToast(auth.reason || "حظر أمني: غير مصرح بتنفيذ هذا الإجراء", "error");
+      return;
+    }
+
     // 1. Re-approve / Keep
     approveRecord('quotation', id);
 
@@ -515,6 +559,17 @@ export const DataReviewCenter: React.FC = () => {
     const quote = quotations.find(q => q.id === quoteId);
     const cust = customers.find(c => c.id === customerId);
     if (!quote || !cust) return;
+
+    const auth = canPerformReviewAction(
+      currentUser,
+      quote.companyId,
+      selectedCompanyIds && selectedCompanyIds.length > 0 ? selectedCompanyIds : [activeCompanyId],
+      currentCompanyRole
+    );
+    if (!auth.allowed) {
+      showToast(auth.reason || "حظر أمني: غير مصرح بتنفيذ هذا الإجراء", "error");
+      return;
+    }
 
     // Update quote
     updateQuotation(quoteId, {
@@ -707,9 +762,10 @@ export const DataReviewCenter: React.FC = () => {
       <div className="bg-[#18191B] border border-[#292B2E] rounded-2xl p-6 shadow-sm">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <div className="flex items-center gap-2.5">
+            <div className="flex items-center gap-2.5 flex-wrap">
               <span className="w-3 h-3 rounded-full bg-[#C8A75A] animate-pulse" />
               <h1 className="text-xl font-bold text-[#EDEDED]">بوابة التحكم والرقابة التامة (DATA CONTROL CENTER)</h1>
+              <CompanyIdentity size="xs" />
             </div>
             <p className="text-xs text-[#A1A1AA] mt-1">
               الطبقة العازلة والإدارية الأكثر صرامة للتدقيق والتحصين. الكشف المباشر ← التشخيص الذكي ← المراجعة اليدوية المقارنة ← الإجراءات وتأصيل الروابط.

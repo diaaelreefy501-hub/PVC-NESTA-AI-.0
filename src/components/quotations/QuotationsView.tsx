@@ -19,6 +19,7 @@ import {
 import { BulkActionBar, StatusOption } from "../common/BulkActionBar";
 import { SmartFilterBar, FilterState } from "../common/SmartFilterBar";
 import { exportToCSV } from "../../utils/exportUtils";
+import { CompanyIdentity } from "../common/CompanyIdentity";
 
 export const QuotationsView: React.FC = () => {
   const {
@@ -166,13 +167,14 @@ export const QuotationsView: React.FC = () => {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#EAEAEA] pb-4">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="p-2 rounded-xl bg-purple-100 text-purple-800">
               <FileSpreadsheet className="w-5 h-5" />
             </span>
             <h1 className="text-xl sm:text-2xl font-black text-[#111111]">
               عروض الأسعار (Quotations Engine)
             </h1>
+            <CompanyIdentity size="xs" />
           </div>
           <p className="text-xs sm:text-sm text-[#6B7280] mt-1">
             حساب مقاسات وتكاليف قطاعات الـ UPVC، إصدار عروض الأسعار الرسمية، والطباعة والإرسال عبر واتساب

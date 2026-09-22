@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { useApp } from "../../context/AppContext";
+import { CompanyLogo } from "../common/CompanyLogo";
 import {
   Customer,
   Interaction,
@@ -1023,11 +1024,10 @@ export const Customer360Modal: React.FC = () => {
                 )}
 
                 {company && (
-                  <span
-                    className={`text-[11px] font-bold px-2 py-0.5 rounded-lg ${company.badgeBg} ${company.badgeText}`}
-                  >
-                    🏢 {company.name}
-                  </span>
+                  <div className="inline-flex items-center gap-1 bg-[#18191B] px-2 py-0.5 rounded-lg border border-[#292B2E]">
+                    <CompanyLogo company={company} size="2xs" />
+                    <span className="text-[11px] font-bold text-[#EDEDED]">{company.name}</span>
+                  </div>
                 )}
                 <span className="text-xs px-2 py-0.5 rounded-lg bg-[#202225] text-[#A1A1AA] border border-[#292B2E]">
                   المصدر: {customer.source}

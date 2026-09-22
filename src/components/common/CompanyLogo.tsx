@@ -3,7 +3,7 @@ import { Company } from "../../types";
 
 interface CompanyLogoProps {
   company?: Company | null;
-  size?: "xs" | "sm" | "md" | "lg" | "xl" | "print";
+  size?: "2xs" | "xs" | "sm" | "md" | "lg" | "xl" | "print";
   className?: string;
   showName?: boolean;
 }
@@ -16,7 +16,7 @@ export const CompanyLogo: React.FC<CompanyLogoProps> = ({
 }) => {
   const [imgError, setImgError] = useState(false);
 
-  // Retrieve logo directly or fallback to persistent storage
+  // Retrieve logo directly from company object (Supabase source of truth)
   const logoSrc = React.useMemo(() => {
     if (!company) return null;
     if (company.logoUrl) return company.logoUrl;
@@ -38,7 +38,7 @@ export const CompanyLogo: React.FC<CompanyLogoProps> = ({
   if (!company) {
     return (
       <div
-        className={`rounded-xl bg-[#111111] text-[#C8A75A] flex items-center justify-center font-bold font-mono text-xs ${className}`}
+        className={`rounded-md bg-[#111111] text-[#C8A75A] flex items-center justify-center font-bold font-mono text-[9px] shrink-0 ${className}`}
       >
         PN
       </div>
@@ -46,27 +46,28 @@ export const CompanyLogo: React.FC<CompanyLogoProps> = ({
   }
 
   const sizeClasses = {
-    xs: "w-6 h-6 text-[10px] rounded-md",
-    sm: "w-8 h-8 text-xs rounded-lg",
-    md: "w-10 h-10 text-sm rounded-xl",
-    lg: "w-14 h-14 text-base rounded-2xl",
-    xl: "w-20 h-20 text-xl rounded-2xl",
-    print: "w-20 h-20 text-lg rounded-2xl",
+    "2xs": "w-4 h-4 text-[8px] rounded-xs",
+    xs: "w-5 h-5 text-[9px] rounded-md",
+    sm: "w-7 h-7 text-[10px] rounded-lg",
+    md: "w-9 h-9 text-xs rounded-xl",
+    lg: "w-12 h-12 text-sm rounded-2xl",
+    xl: "w-16 h-16 text-base rounded-2xl",
+    print: "w-16 h-16 text-xs rounded-xl",
   };
 
   const hasImage = Boolean(logoSrc && !imgError);
 
   return (
-    <div className={`inline-flex items-center gap-2 ${className}`}>
+    <div className={`inline-flex items-center gap-1.5 ${className}`}>
       {hasImage ? (
         <div
-          className={`${sizeClasses[size]} overflow-hidden flex items-center justify-center bg-white border border-[#EAEAEA] shadow-2xs shrink-0 p-1`}
+          className={`${sizeClasses[size]} overflow-hidden flex items-center justify-center bg-white border border-[#EAEAEA] shadow-2xs shrink-0 p-0.5`}
         >
           <img
             src={logoSrc!}
             alt={company.name}
             onError={() => setImgError(true)}
-            className="w-full h-full object-contain rounded"
+            className="w-full h-full object-contain rounded-xs"
             referrerPolicy="no-referrer"
           />
         </div>
@@ -80,10 +81,10 @@ export const CompanyLogo: React.FC<CompanyLogoProps> = ({
       )}
 
       {showName && (
-        <div className="leading-tight">
-          <div className="font-extrabold text-[#111111] text-sm">{company.name}</div>
+        <div className="leading-tight truncate">
+          <div className="font-bold text-[#EDEDED] text-xs truncate">{company.name}</div>
           {company.nameEn && (
-            <div className="text-[10px] text-[#6B7280] font-mono">{company.nameEn}</div>
+            <div className="text-[9px] text-[#A1A1AA] font-mono truncate">{company.nameEn}</div>
           )}
         </div>
       )}

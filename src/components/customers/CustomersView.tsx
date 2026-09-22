@@ -20,6 +20,7 @@ import {
   FileSpreadsheet,
 } from "lucide-react";
 import { CustomerEditModal } from "./CustomerEditModal";
+import { CompanyIdentity } from "../common/CompanyIdentity";
 import { BulkActionBar, StatusOption } from "../common/BulkActionBar";
 import { SmartFilterBar, FilterState } from "../common/SmartFilterBar";
 import { exportToCSV } from "../../utils/exportUtils";
@@ -289,9 +290,12 @@ export const CustomersView: React.FC = () => {
               <Users className="w-6 h-6" />
             </span>
             <div>
-              <h1 className="text-xl sm:text-2xl font-black text-[#EDEDED]">
-                قاعدة العملاء والتحكم بالبيانات (Customers)
-              </h1>
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <h1 className="text-xl sm:text-2xl font-black text-[#EDEDED]">
+                  قاعدة العملاء والتحكم بالبيانات (Customers)
+                </h1>
+                <CompanyIdentity size="xs" />
+              </div>
               <p className="text-xs sm:text-sm text-[#A1A1AA]">
                 إدارة وسجلات العملاء مع نظام الفلاتر الذكية والعمليات المجمعة الشاملة
               </p>

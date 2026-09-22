@@ -23,6 +23,7 @@ import {
   Search,
 } from "lucide-react";
 import { PeriodType, PeriodFilterOptions, filterEntityCollection } from "../../utils/kpiEngine";
+import { CompanyIdentity } from "../common/CompanyIdentity";
 
 type ReportCategory =
   | "sales"
@@ -367,7 +368,10 @@ export const ReportsView: React.FC = () => {
             <FileText className="w-5 h-5" />
           </div>
           <div>
-            <h1 className="text-xl font-black text-[#EDEDED]">مركز التقارير والتحليلات الموحد</h1>
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <h1 className="text-xl font-black text-[#EDEDED]">مركز التقارير والتحليلات الموحد</h1>
+              <CompanyIdentity size="xs" />
+            </div>
             <p className="text-xs text-[#A1A1AA] mt-0.5">
               تقارير استراتيجية دقيقة ومحدثة آنياً من واقع السجلات المعتمدة لكافة العمليات
             </p>

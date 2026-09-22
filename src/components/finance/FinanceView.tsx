@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { PaymentMethod, CollectionStatus } from "../../types";
 import { EmployeeFinanceTable } from "./EmployeeFinanceTable";
+import { CompanyIdentity } from "../common/CompanyIdentity";
 import { FinanceDrillDownModal } from "./FinanceDrillDownModal";
 
 export const FinanceView: React.FC = () => {
@@ -413,7 +414,10 @@ export const FinanceView: React.FC = () => {
               <DollarSign className="w-5 h-5" />
             </div>
             <div>
-              <h1 className="text-xl font-black text-[#EDEDED]">الإدارة المالية والتحصيلات</h1>
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <h1 className="text-xl font-black text-[#EDEDED]">الإدارة المالية والتحصيلات</h1>
+                <CompanyIdentity size="xs" />
+              </div>
               <p className="text-xs text-[#A1A1AA] mt-0.5">
                 تتبع التدفقات النقدية، جداول التحصيل، استحقاقات العمولات والميزانيات الإعلانية
               </p>

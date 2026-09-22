@@ -871,7 +871,18 @@ export class PersistenceEngine {
         return { success: true, message: "تم الحذف والتحقق من السحابة بنجاح" };
       } else if (change.action === "insert" || change.action === "create") {
         const sanitized = this.sanitizeForTable(change.entityType, change.payload, "insert");
-        const { error } = await supabase.from(table).upsert([sanitized]);
+        let { error } = await supabase.from(table).upsert([sanitized]);
+
+        // Dynamic self-healing fallback for followup missing opportunityId / opportunity_id in DB schema
+        if (error && change.entityType === "followup" && error.code === "42703" && (error.message?.includes("opportunityId") || error.message?.includes("opportunity_id"))) {
+          console.warn("[Database Schema Warning] follow_ups table lacks opportunityId/opportunity_id. Retrying after stripping.");
+          const fallback = { ...sanitized };
+          delete fallback.opportunityId;
+          delete fallback.opportunity_id;
+          const retryRes = await supabase.from(table).upsert([fallback]);
+          error = retryRes.error;
+        }
+
         if (error && error.code !== "PGRST205") throw error;
 
         // READ-BACK VERIFY FOR INSERT
@@ -918,7 +929,18 @@ export class PersistenceEngine {
         }
 
         const sanitized = this.sanitizeForTable(change.entityType, change.payload, "update");
-        const { error } = await supabase.from(table).update(sanitized).eq("id", change.recordId);
+        let { error } = await supabase.from(table).update(sanitized).eq("id", change.recordId);
+
+        // Dynamic self-healing fallback for followup missing opportunityId / opportunity_id in DB schema
+        if (error && change.entityType === "followup" && error.code === "42703" && (error.message?.includes("opportunityId") || error.message?.includes("opportunity_id"))) {
+          console.warn("[Database Schema Warning] follow_ups table lacks opportunityId/opportunity_id. Retrying update after stripping.");
+          const fallback = { ...sanitized };
+          delete fallback.opportunityId;
+          delete fallback.opportunity_id;
+          const retryRes = await supabase.from(table).update(fallback).eq("id", change.recordId);
+          error = retryRes.error;
+        }
+
         if (error && error.code !== "PGRST205") throw error;
 
         // READ-BACK VERIFY FOR UPDATE

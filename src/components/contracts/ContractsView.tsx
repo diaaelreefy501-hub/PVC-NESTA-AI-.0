@@ -21,6 +21,7 @@ import {
   UserPlus,
   Users,
 } from "lucide-react";
+import { CompanyIdentity } from "../common/CompanyIdentity";
 
 export const ContractsView: React.FC = () => {
   const {
@@ -336,6 +337,7 @@ export const ContractsView: React.FC = () => {
             <h1 className="text-xl sm:text-2xl font-black text-slate-900">
               إدارة العقود والاتفاقيات (Contracts)
             </h1>
+            <CompanyIdentity size="xs" />
             {/* Top Metrics Badges: Count & Total Value */}
             <div className="flex items-center gap-2 mr-0 sm:mr-3">
               <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-emerald-600 text-white font-bold text-xs shadow-xs">

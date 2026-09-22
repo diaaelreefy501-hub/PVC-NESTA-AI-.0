@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useApp } from "../../context/AppContext";
+import { CompanyIdentity } from "./CompanyIdentity";
+import { CompanyLogo } from "./CompanyLogo";
 import {
   Building2,
   Sparkles,
@@ -144,6 +146,13 @@ export const Header: React.FC = () => {
             <h1 className="text-xs sm:text-sm font-bold text-[#EDEDED] truncate max-w-[90px] sm:max-w-none">
               {tabTitles[currentTab] || "الرئيسية"}
             </h1>
+          </div>
+
+          <div className="h-4 w-px bg-[#292B2E] hidden sm:block" />
+
+          {/* Persistent Multi-Company Identity Layer */}
+          <div className="hidden sm:block">
+            <CompanyIdentity size="xs" />
           </div>
         </div>
 
@@ -316,10 +325,7 @@ export const Header: React.FC = () => {
                         }`}
                       >
                         <div className="flex items-center gap-2 truncate">
-                          <span
-                            className="w-2.5 h-2.5 rounded-full shrink-0"
-                            style={{ backgroundColor: c.color || "#38bdf8" }}
-                          />
+                          <CompanyLogo company={c} size="2xs" />
                           <span className="truncate">{c.name}</span>
                         </div>
                         <div className="flex items-center gap-1.5 shrink-0">

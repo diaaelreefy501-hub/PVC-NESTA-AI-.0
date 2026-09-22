@@ -23,6 +23,7 @@ import {
 import { BulkActionBar, StatusOption } from "../common/BulkActionBar";
 import { SmartFilterBar, FilterState } from "../common/SmartFilterBar";
 import { exportToCSV } from "../../utils/exportUtils";
+import { CompanyIdentity } from "../common/CompanyIdentity";
 
 export const InquiriesView: React.FC = () => {
   const {
@@ -328,9 +329,12 @@ export const InquiriesView: React.FC = () => {
               <Inbox className="w-6 h-6" />
             </span>
             <div>
-              <h1 className="text-xl sm:text-2xl font-black text-[#111111]">
-                سجل الاستفسارات والطلبات (Inquiries)
-              </h1>
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <h1 className="text-xl sm:text-2xl font-black text-[#111111]">
+                  سجل الاستفسارات والطلبات (Inquiries)
+                </h1>
+                <CompanyIdentity size="xs" />
+              </div>
               <p className="text-xs sm:text-sm text-[#6B7280]">
                 تفصيل الاستفسارات (العملاء المهتمون والتأهيل 🟢 / العملاء غير المهتمين 🔴) مع المعادلة التجميعية المطلوبة
               </p>
